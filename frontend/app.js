@@ -21,8 +21,9 @@ const dom = {
   coordY: document.getElementById("coord-y"),
   boundsX: document.getElementById("bounds-x"),
   boundsY: document.getElementById("bounds-y"),
-  tileTemplate: document.getElementById("tile-template"),
-  tileProbes: document.getElementById("tile-probes"),
+
+  debugLevel: document.getElementById("debug-level"),
+  debugTileList: document.getElementById("debug-tile-list"),
   sceneList: document.getElementById("scene-list"),
   viewerPlaceholder: document.querySelector(".viewer-placeholder"),
   viewerFrame: document.getElementById("viewer-frame"),
@@ -54,17 +55,40 @@ function renderSceneList() {
   });
 }
 
-function renderTileProbes(scene) {
-  dom.tileProbes.innerHTML = "";
-  (scene.sample_tile_urls || []).forEach((url) => {
-    const item = document.createElement("a");
-    item.className = "tile-probe";
-    item.href = url;
-    item.target = "_blank";
-    item.rel = "noreferrer";
-    item.textContent = url;
-    dom.tileProbes.appendChild(item);
-  });
+function renderDebugTiles(scene) {
+  if (!dom.debugTileList) {
+    return;
+  }
+  dom.debugTileList.innerHTML = "";
+  const level = scene.viewer_source_level || "l3";
+  if (dom.debugLevel) {
+    dom.debugLevel.textContent = `${level} | ${scene.viewer_source_tile_rows || 0}x${scene.viewer_source_tile_cols || 0}`;
+  }
+
+  const debugUrls = scene.viewer_debug_tile_urls || {};
+  for (const face of ["f", "b", "l", "r", "u", "d"]) {
+    const urls = debugUrls[face] || [];
+    const faceCard = document.createElement("section");
+    faceCard.className = "debug-face-card";
+
+    const heading = document.createElement("div");
+    heading.className = "debug-face-head";
+    heading.innerHTML = `<span>${face}</span><strong>${urls.length}</strong>`;
+    faceCard.appendChild(heading);
+
+    const grid = document.createElement("div");
+    grid.className = "debug-url-grid";
+    urls.forEach((url) => {
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = url;
+      grid.appendChild(link);
+    });
+    faceCard.appendChild(grid);
+    dom.debugTileList.appendChild(faceCard);
+  }
 }
 
 function clearViewer() {
@@ -150,8 +174,7 @@ function renderScene(scene) {
   dom.coordY.textContent = formatValue(scene.coordinate_y);
   dom.boundsX.textContent = `X: ${formatValue(state.bounds?.x_min)} → ${formatValue(state.bounds?.x_max)}`;
   dom.boundsY.textContent = `Y: ${formatValue(state.bounds?.y_min)} → ${formatValue(state.bounds?.y_max)}`;
-  dom.tileTemplate.textContent = scene.tile_url_template || "-";
-  renderTileProbes(scene);
+  renderDebugTiles(scene);
   renderViewer(scene);
 
   document.querySelectorAll(".scene-chip").forEach((button) => {
