@@ -7,6 +7,7 @@ import mimetypes
 import random
 import re
 import threading
+import time
 import xml.etree.ElementTree as ET
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,10 @@ FRONTEND_DIR = ROOT / "frontend"
 CATALOG_PATH = PROCESSED_DIR / "scene_catalog.mvp20.local.json"
 INVENTORY_PATH = PROCESSED_DIR / "local_tiles_inventory.json"
 TOUR_XML_PATH = RAW_DIR / "project_tour.xml"
+REQUEST_LOG_PATH = ROOT / "logs" / "viewer-network-requests.jsonl"
+REQUEST_LOG_LOCK = threading.Lock()
+VIEWER_MANIFEST_LOG_PATH = ROOT / "logs" / "viewer-manifest-log.jsonl"
+VIEWER_MANIFEST_LOG_LOCK = threading.Lock()
 
 
 def parse_coordinate(value: str) -> Tuple[Optional[float], Optional[float]]:
@@ -152,6 +157,112 @@ def load_tour_scene_index() -> Tuple[Dict[str, Dict[str, Any]], Dict[Tuple[int, 
 TOUR_SCENE_INDEX, TOUR_PANO_INDEX = load_tour_scene_index()
 INVENTORY = load_inventory()
 
+_PROJECT_TOUR_L3_ONLY_BYTES: Optional[bytes] = None
+_PROJECT_TOUR_L3_ONLY_LOCK = threading.Lock()
+
+
+def build_project_tour_l3_only_xml() -> bytes:
+    """本地只有 l3 瓦片时，去掉官方 tour 里的 l4/l2/l1，避免 krpano 去拉不存在的层。"""
+    raw = TOUR_XML_PATH.read_text(encoding="utf-8")
+    root = ET.fromstring(raw)
+    for image in root.iter("image"):
+        if str(image.get("type") or "").upper() != "CUBE":
+            continue
+        if str(image.get("multires") or "").lower() != "true":
+            continue
+        for level in list(image.findall("level")):
+            cube = level.find("cube")
+            url = str(cube.get("url") or "") if cube is not None else ""
+            if parse_level_from_cube_url(url) != 3:
+                image.remove(level)
+    body = ET.tostring(root, encoding="utf-8", xml_declaration=False)
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + body
+
+
+def get_project_tour_l3_only_bytes() -> Optional[bytes]:
+    global _PROJECT_TOUR_L3_ONLY_BYTES
+    if _PROJECT_TOUR_L3_ONLY_BYTES is not None:
+        return _PROJECT_TOUR_L3_ONLY_BYTES
+    if not TOUR_XML_PATH.is_file():
+        return None
+    with _PROJECT_TOUR_L3_ONLY_LOCK:
+        if _PROJECT_TOUR_L3_ONLY_BYTES is not None:
+            return _PROJECT_TOUR_L3_ONLY_BYTES
+        try:
+            _PROJECT_TOUR_L3_ONLY_BYTES = build_project_tour_l3_only_xml()
+        except (ET.ParseError, OSError):
+            _PROJECT_TOUR_L3_ONLY_BYTES = None
+    return _PROJECT_TOUR_L3_ONLY_BYTES
+
+
+def append_request_log(requestline: str, code: Any, size: Any, headers: Dict[str, str]) -> None:
+    parts = requestline.split()
+    if len(parts) < 2:
+        return
+    method = parts[0]
+    raw_path = parts[1]
+    parsed = urlparse(raw_path)
+    pathname = unquote(parsed.path)
+    record: Dict[str, Any] = {
+        "ts": time.time(),
+        "method": method,
+        "path": pathname,
+        "query": parsed.query,
+        "code": int(code) if str(code).isdigit() else code,
+        "size": int(size) if str(size).isdigit() else size,
+        "referer": headers.get("Referer", ""),
+        "user_agent": headers.get("User-Agent", ""),
+    }
+    if pathname.startswith("/assets/viewer/panos/"):
+        match = re.search(
+            r"/assets/viewer/panos/(\d+)/([^/]+)/(?:([fbrlud])/l(\d+)|l(\d+)/([fbrlud]))/(\d+)/(\d+)\.jpg$",
+            pathname,
+        )
+        if match:
+            face = match.group(3) or match.group(6) or ""
+            level = match.group(4) or match.group(5) or ""
+            record.update(
+                {
+                    "panorama_id": int(match.group(1)),
+                    "pano_stub": match.group(2),
+                    "face": face,
+                    "level": int(level) if str(level).isdigit() else None,
+                    "row": int(match.group(7)),
+                    "col": int(match.group(8)),
+                }
+            )
+
+    REQUEST_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with REQUEST_LOG_LOCK:
+        with REQUEST_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def append_viewer_manifest_log(scene_name: str, scene_payload: Dict[str, Any]) -> None:
+    viewer = scene_payload.get("viewer") or {}
+    manifest: Dict[str, Any] = {
+        "ts": time.time(),
+        "scene_name": scene_name,
+        "panorama_id": scene_payload.get("panorama_id"),
+        "pano_stub": scene_payload.get("pano_stub"),
+        "viewer_type": viewer.get("type"),
+        "basePath": viewer.get("basePath"),
+        "path": viewer.get("path"),
+        "extension": viewer.get("extension"),
+        "tileResolution": viewer.get("tileResolution"),
+        "maxLevel": viewer.get("maxLevel"),
+        "cubeResolution": viewer.get("cubeResolution"),
+        "source_level": scene_payload.get("viewer_source_level"),
+        "source_rows": scene_payload.get("viewer_source_tile_rows"),
+        "source_cols": scene_payload.get("viewer_source_tile_cols"),
+        "debug_tile_count": sum(len(v) for v in (scene_payload.get("viewer_debug_tile_urls") or {}).values()),
+        "expected_tiles": scene_payload.get("viewer_debug_tile_urls") or {},
+    }
+    VIEWER_MANIFEST_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with VIEWER_MANIFEST_LOG_LOCK:
+        with VIEWER_MANIFEST_LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(manifest, ensure_ascii=False) + "\n")
+
 
 def choose_viewer_level_number(tour_scene: Optional[Dict[str, Any]], inventory_row: Dict[str, Any]) -> int:
     xml_levels = list(tour_scene.get("level_numbers") or []) if tour_scene else []
@@ -186,6 +297,17 @@ def pick_local_level_tag(inventory_row: Dict[str, Any], default_tag: str = "l1")
     if level_numbers:
         return f"l{max(level_numbers)}"
     return default_tag
+
+
+def list_local_level_numbers(inventory_row: Dict[str, Any]) -> List[int]:
+    level_numbers: List[int] = []
+    for key, count in (inventory_row.get("levels") or {}).items():
+        if not count:
+            continue
+        level_no = parse_level_token(str(key))
+        if level_no is not None:
+            level_numbers.append(level_no)
+    return sorted(set(level_numbers))
 
 
 def inspect_local_level_grid(panorama_id: int, pano_stub: str, level_tag: str, face: str = "f") -> Dict[str, Any]:
@@ -312,7 +434,7 @@ def build_debug_tile_urls(panorama_id: int, pano_stub: str, source_level: str, r
         for row_index in range(row_count):
             for col_index in range(col_count):
                 face_urls.append(
-                    f"/assets/viewer/panos/{panorama_id}/{pano_stub}/{face}/{source_level}/{row_index}/{col_index}.jpg"
+                    f"/assets/viewer/panos/{panorama_id}/{pano_stub}/{source_level}/{face}/{row_index}/{col_index}.jpg"
                 )
         urls[face] = face_urls
     return urls
@@ -340,6 +462,10 @@ def build_scene_record(row: Dict[str, Any], inventory: Dict[Tuple[int, str], Dic
 
     viewer_level_no = choose_viewer_level_number(tour_scene, inventory_row)
     viewer_local_level_tag = pick_local_level_tag(inventory_row, f"l{viewer_level_no}")
+    viewer_local_level_no = parse_level_token(viewer_local_level_tag) or viewer_level_no
+    viewer_local_levels = list_local_level_numbers(inventory_row)
+    if not viewer_local_levels:
+        viewer_local_levels = [viewer_local_level_no]
     grid_info = inspect_local_level_grid(panorama_id, pano_stub, viewer_local_level_tag)
 
     cube_resolution = int(row.get("tile_size") or 512)
@@ -365,8 +491,28 @@ def build_scene_record(row: Dict[str, Any], inventory: Dict[Tuple[int, str], Dic
             for face in ("f", "b", "l", "r", "u", "d"):
                 sample_tiles.append(materialize_cube_url(cube_url_template, face, "01", "01"))
 
+    # Prefer XML per-level face resolution when available; fall back to local grid estimate.
+    local_row_count = int(grid_info.get("row_count") or 0)
+    local_col_count = int(grid_info.get("col_count") or 0)
+    local_cube_resolution = max(local_row_count, local_col_count) * max(1, tile_resolution)
+    if tour_scene:
+        level_info = (tour_scene.get("levels") or {}).get(viewer_level_no, {})
+        xml_level_width = int(level_info.get("tiledimagewidth") or 0)
+        xml_level_height = int(level_info.get("tiledimageheight") or 0)
+        xml_cube_resolution = max(xml_level_width, xml_level_height)
+        if xml_cube_resolution > 0:
+            cube_resolution = xml_cube_resolution
+        elif local_cube_resolution > 0:
+            cube_resolution = local_cube_resolution
+    elif local_cube_resolution > 0:
+        cube_resolution = local_cube_resolution
+
     viewer_base_path = f"/assets/viewer/panos/{panorama_id}/{pano_stub}"
-    viewer_path = "/%s/l%l/%y/%x"
+    viewer_virtual_to_actual = {index + 1: level_no for index, level_no in enumerate(viewer_local_levels)}
+    viewer_actual_to_virtual = {level_no: index + 1 for index, level_no in enumerate(viewer_local_levels)}
+    viewer_max_virtual_level = max(viewer_local_level_no, max(viewer_virtual_to_actual.keys()) if viewer_virtual_to_actual else 1)
+    viewer_selected_virtual_level = viewer_actual_to_virtual.get(viewer_local_level_no, viewer_max_virtual_level)
+    viewer_path = "/l%l/%s/%y/%x"
 
     xml_level_numbers = list((tour_scene or {}).get("level_numbers") or [])
 
@@ -390,8 +536,13 @@ def build_scene_record(row: Dict[str, Any], inventory: Dict[Tuple[int, str], Dic
         "tile_size": tile_resolution,
         "tiled_widths_desc": tiled_widths_desc,
         "viewer_source_level": viewer_local_level_tag,
+        "viewer_source_level_no": viewer_local_level_no,
+        "viewer_virtual_max_level": viewer_max_virtual_level,
+        "viewer_virtual_level_map": {str(key): int(value) for key, value in viewer_virtual_to_actual.items()},
+        "viewer_selected_virtual_level": viewer_selected_virtual_level,
         "viewer_source_tile_rows": grid_info["row_count"],
         "viewer_source_tile_cols": grid_info["col_count"],
+        "viewer_local_cube_resolution": local_cube_resolution,
         "viewer_xml_levels": xml_level_numbers,
         "viewer_debug_tile_urls": build_debug_tile_urls(
             panorama_id,
@@ -407,8 +558,8 @@ def build_scene_record(row: Dict[str, Any], inventory: Dict[Tuple[int, str], Dic
             "path": "/l%l/%s/%y/%x",
             "extension": "jpg",
             "tileResolution": tile_resolution,
-            "maxLevel": max(1, max(xml_level_numbers) if xml_level_numbers else viewer_level_no),
-            "cubeResolution": max(cube_resolution, tile_resolution),
+            "maxLevel": max(1, viewer_max_virtual_level),
+            "cubeResolution": max(tile_resolution, cube_resolution),
             "autoLoad": True,
             "showControls": True,
             "mouseZoom": "fullscreenonly",
@@ -421,17 +572,123 @@ def build_scene_record(row: Dict[str, Any], inventory: Dict[Tuple[int, str], Dic
     }
 
 
+def build_synthetic_debug_scene() -> Dict[str, Any]:
+    panorama_id = 999
+    pano_stub = "synth_debug"
+    level_tag = "l3"
+    row_count = 6
+    col_count = 6
+    tile_resolution = 512
+    cube_resolution = row_count * tile_resolution
+    return {
+        "scene_name": "scene_debug_tiles",
+        "scene_title": "调试网格(216)",
+        "scene_id": 0,
+        "pano_stub": pano_stub,
+        "season_hint": "debug",
+        "preview_url": "",
+        "preview_asset_url": "",
+        "panorama_id": panorama_id,
+        "panorama_name": "Synthetic Grid",
+        "scene_group_name": "Debug",
+        "coordinate": "",
+        "coordinate_x": None,
+        "coordinate_y": None,
+        "x_axis": "",
+        "y_axis": "",
+        "seasons": ["debug"],
+        "tile_size": tile_resolution,
+        "tiled_widths_desc": [cube_resolution],
+        "viewer_source_level": level_tag,
+        "viewer_source_level_no": 3,
+        "viewer_virtual_max_level": 3,
+        "viewer_virtual_level_map": {"1": 3, "2": 3, "3": 3},
+        "viewer_selected_virtual_level": 3,
+        "viewer_source_tile_rows": row_count,
+        "viewer_source_tile_cols": col_count,
+        "viewer_local_cube_resolution": row_count * tile_resolution,
+        "viewer_xml_levels": [3],
+        "viewer_debug_tile_urls": build_debug_tile_urls(
+            panorama_id,
+            pano_stub,
+            level_tag,
+            row_count,
+            col_count,
+        ),
+        "tile_url_template": build_viewer_alias_template(panorama_id, pano_stub),
+        "viewer": {
+            "type": "multires",
+            "basePath": f"/assets/viewer/panos/{panorama_id}/{pano_stub}",
+            "path": "/l%l/%s/%y/%x",
+            "extension": "jpg",
+            "tileResolution": tile_resolution,
+            "maxLevel": 3,
+            "cubeResolution": cube_resolution,
+            "autoLoad": True,
+            "showControls": True,
+            "mouseZoom": "fullscreenonly",
+            "backgroundColor": [0.04, 0.05, 0.09],
+        },
+        "sample_tile_urls": [],
+        "local_tile_count": 216,
+        "local_tile_levels": {"l3": 216},
+        "local_tile_faces": {"f": 36, "b": 36, "l": 36, "r": 36, "u": 36, "d": 36},
+    }
+
+
+def resolve_debug_synth_tile_path(face: str, level: str, row: str, col: str) -> Path:
+    level_no = parse_level_token(level) or 1
+    if level_no not in {1, 2, 3}:
+        raise FileNotFoundError(f"debug_level_missing: requested=l{level_no}, only=l3")
+    try:
+        row_idx = int(row)
+        col_idx = int(col)
+    except ValueError as err:
+        raise FileNotFoundError(f"invalid_row_or_col: row={row}, col={col}") from err
+
+    if row_idx < 0 or row_idx >= 6 or col_idx < 0 or col_idx >= 6:
+        raise FileNotFoundError(f"debug_tile_out_of_range: row={row_idx}, col={col_idx}, rows=6, cols=6")
+
+    row_token = f"{row_idx + 1:02d}"
+    col_token = f"{col_idx + 1:02d}"
+    tile_name = f"l3_{face}_{row_token}_{col_token}.jpg"
+    tile_path = RAW_DIR / "panoramas" / "999" / "tiles" / "synth_debug" / face / "l3" / row_token / tile_name
+    if not tile_path.exists():
+        raise FileNotFoundError(f"debug_tile_missing: {tile_path}")
+    return tile_path
+
+
 def resolve_viewer_tile_path(panorama_id: int, pano_stub: str, face: str, level: str, row: str, col: str) -> Path:
     face_transforms = get_current_face_transforms()
     source_face, transform = face_transforms.get(face, (face, "id"))
     tour_scene = TOUR_PANO_INDEX.get((panorama_id, pano_stub))
     if not tour_scene:
+        if panorama_id == 999 and pano_stub == "synth_debug":
+            return resolve_debug_synth_tile_path(source_face, level, row, col)
         raise FileNotFoundError(f"tour_scene_not_found: panorama_id={panorama_id}, pano_stub={pano_stub}")
 
     requested_level_no = parse_level_token(level) or 1
-    local_level_tag = pick_local_level_tag(INVENTORY.get((panorama_id, pano_stub), {}), f"l{requested_level_no}")
-    selected_level_no = parse_level_token(local_level_tag) or requested_level_no
-    selected_level_tag = local_level_tag
+    inventory_row = INVENTORY.get((panorama_id, pano_stub), {})
+    available_levels = list_local_level_numbers(inventory_row)
+    if not available_levels:
+        raise FileNotFoundError(
+            f"local_levels_empty: panorama_id={panorama_id}, pano_stub={pano_stub}"
+        )
+
+    actual_level_no = requested_level_no
+    if requested_level_no not in available_levels:
+        # Pannellum level ids are contiguous, but local levels can be sparse (e.g. only l3).
+        # Map requested virtual level to the nearest available local level by rank.
+        fallback_index = min(max(requested_level_no - 1, 0), len(available_levels) - 1)
+        actual_level_no = available_levels[fallback_index]
+
+    if actual_level_no not in available_levels:
+        raise FileNotFoundError(
+            f"local_level_missing: panorama_id={panorama_id}, pano_stub={pano_stub}, requested_level=l{requested_level_no}, resolved_level=l{actual_level_no}, available_levels={available_levels}"
+        )
+
+    selected_level_no = actual_level_no
+    selected_level_tag = f"l{selected_level_no}"
     level_info = (tour_scene.get("levels") or {}).get(selected_level_no, {})
     cube_url_template = str(level_info.get("cube_url") or "")
     if not cube_url_template:
@@ -450,17 +707,28 @@ def resolve_viewer_tile_path(panorama_id: int, pano_stub: str, face: str, level:
     tile_rows = int(grid_info.get("row_count") or 0)
     tile_cols = int(grid_info.get("col_count") or 0)
 
-    if tile_rows > 0 and tile_cols > 0:
-        if transform == "flip_xy":
-            row_idx = tile_rows - 1 - row_idx
-            col_idx = tile_cols - 1 - col_idx
-        elif transform == "swap_fy":
-            row_idx, col_idx = tile_rows - 1 - col_idx, row_idx
-        elif transform == "swap_fx":
-            row_idx, col_idx = col_idx, tile_cols - 1 - row_idx
+    if tile_rows <= 0 or tile_cols <= 0:
+        raise FileNotFoundError(
+            f"local_level_empty: panorama_id={panorama_id}, pano_stub={pano_stub}, level={selected_level_tag}, face={source_face}"
+        )
 
-        row_idx = max(0, min(tile_rows - 1, row_idx))
-        col_idx = max(0, min(tile_cols - 1, col_idx))
+    if row_idx < 0 or row_idx >= tile_rows or col_idx < 0 or col_idx >= tile_cols:
+        raise FileNotFoundError(
+            f"tile_out_of_range_before_transform: level={selected_level_tag}, face={face}, row={row}, col={col}, rows={tile_rows}, cols={tile_cols}"
+        )
+
+    if transform == "flip_xy":
+        row_idx = tile_rows - 1 - row_idx
+        col_idx = tile_cols - 1 - col_idx
+    elif transform == "swap_fy":
+        row_idx, col_idx = tile_rows - 1 - col_idx, row_idx
+    elif transform == "swap_fx":
+        row_idx, col_idx = col_idx, tile_cols - 1 - row_idx
+
+    if row_idx < 0 or row_idx >= tile_rows or col_idx < 0 or col_idx >= tile_cols:
+        raise FileNotFoundError(
+            f"tile_out_of_range_after_transform: level={selected_level_tag}, source_face={source_face}, row={row_idx}, col={col_idx}, rows={tile_rows}, cols={tile_cols}"
+        )
 
     candidates: List[Path] = []
     row_tokens = [f"{row_idx + 1:02d}", str(row_idx + 1), f"{row_idx:02d}", str(row_idx)]
@@ -501,6 +769,7 @@ def load_state() -> Dict[str, Any]:
 
     inventory = INVENTORY
     scenes = [build_scene_record(row, inventory) for row in raw_catalog]
+    scenes.append(build_synthetic_debug_scene())
     scenes.sort(key=lambda item: (item.get("scene_id") or 0, item.get("scene_name") or ""))
 
     x_values = [scene["coordinate_x"] for scene in scenes if scene["coordinate_x"] is not None]
@@ -529,6 +798,9 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
+
+    def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        append_request_log(self.requestline, code, size, {key: value for key, value in self.headers.items()})
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -581,7 +853,9 @@ class AppHandler(BaseHTTPRequestHandler):
             )
 
         if pathname == "/api/config":
-            first_scene = STATE["scenes"][0] if STATE["scenes"] else None
+            first_scene = next((scene for scene in STATE["scenes"] if scene.get("scene_name") != "scene_debug_tiles"), None)
+            if first_scene is None:
+                first_scene = STATE["scenes"][0] if STATE["scenes"] else None
             mapping_payload = get_mapping_payload()
             return self._send_json(
                 HTTPStatus.OK,
@@ -628,16 +902,23 @@ class AppHandler(BaseHTTPRequestHandler):
         if pathname == "/api/scenes/random":
             if not STATE["scenes"]:
                 return self._send_json(HTTPStatus.NOT_FOUND, {"error": "scene_catalog_empty"})
-            return self._send_json(HTTPStatus.OK, random.choice(STATE["scenes"]))
+            scene = random.choice(STATE["scenes"])
+            append_viewer_manifest_log(str(scene.get("scene_name") or ""), scene)
+            return self._send_json(HTTPStatus.OK, scene)
 
         if pathname.startswith("/api/scenes/"):
             scene_name = pathname.removeprefix("/api/scenes/")
             scene = STATE["by_name"].get(scene_name)
             if not scene:
                 return self._send_json(HTTPStatus.NOT_FOUND, {"error": "scene_not_found", "scene_name": scene_name})
+            append_viewer_manifest_log(scene_name, scene)
             return self._send_json(HTTPStatus.OK, scene)
 
         if pathname.startswith("/assets/"):
+            if pathname == "/assets/project_tour.xml":
+                stripped = get_project_tour_l3_only_bytes()
+                if stripped:
+                    return self._send(HTTPStatus.OK, stripped, "application/xml; charset=utf-8")
             if pathname.startswith("/assets/viewer/panos/"):
                 parts = pathname.split("/")
                 if len(parts) >= 8:
@@ -670,7 +951,52 @@ class AppHandler(BaseHTTPRequestHandler):
                     except Exception as err:  # noqa: BLE001
                         return self._send_json(HTTPStatus.NOT_FOUND, {"error": "viewer_tile_route_error", "detail": str(err)})
             asset_path = pathname.removeprefix("/assets/")
-            return self._serve_file(RAW_DIR / asset_path)
+            candidate = RAW_DIR / asset_path
+            # Some assets may be stored under data/raw/assets/... (installer used that path).
+            if not candidate.exists():
+                candidate = RAW_DIR / "assets" / asset_path
+            return self._serve_file(candidate)
+
+        if pathname.startswith("/panoramas/"):
+            preview_match = re.search(
+                r"^/panoramas/(\d+)/krpano/panos/([^/]+)\.tiles/preview\.jpg$",
+                pathname,
+            )
+            if preview_match:
+                try:
+                    panorama_id = int(preview_match.group(1))
+                    pano_stub = preview_match.group(2)
+                    preview_path = resolve_viewer_tile_path(panorama_id, pano_stub, "f", "l3", "0", "0")
+                    return self._serve_file(preview_path)
+                except Exception:
+                    pass
+
+            krpano_match = re.search(
+                r"^/panoramas/(\d+)/krpano/panos/([^/]+)\.tiles/([fbrlud])/(l\d+)/(\d+)/[^/]*_(\d+)\.jpg$",
+                pathname,
+            )
+            if krpano_match:
+                try:
+                    panorama_id = int(krpano_match.group(1))
+                    pano_stub = krpano_match.group(2)
+                    face = krpano_match.group(3)
+                    level = krpano_match.group(4)
+                    row = str(int(krpano_match.group(5)) - 1)
+                    col = str(int(krpano_match.group(6)) - 1)
+                    tile_path = resolve_viewer_tile_path(panorama_id, pano_stub, face, level, row, col)
+                    return self._serve_file(tile_path)
+                except Exception:
+                    pass
+
+            candidate = RAW_DIR / pathname.lstrip("/")
+            if not candidate.exists():
+                mapped = re.sub(r"^/panoramas/(\d+)/krpano/panos/([^/]+)\.tiles/", r"/panoramas/\1/tiles/\2/", pathname)
+                if mapped != pathname:
+                    candidate = RAW_DIR / mapped.lstrip("/")
+            return self._serve_file(candidate)
+
+        if pathname == "/resource/gyro2.js":
+            return self._send(HTTPStatus.OK, b"// gyro stub for local viewer\n", "application/javascript; charset=utf-8")
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found", "path": pathname})
 

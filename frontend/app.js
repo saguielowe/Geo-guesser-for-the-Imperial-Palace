@@ -3,10 +3,8 @@ const state = {
   currentScene: null,
   bounds: null,
   viewer: null,
-  mapping: {
-    currentMode: null,
-    modes: [],
-  },
+  usedTilesPollTimer: null,
+  krpanoViewerId: "krpano_viewer",
 };
 
 const dom = {
@@ -29,8 +27,162 @@ const dom = {
   viewerFrame: document.getElementById("viewer-frame"),
   viewerCanvas: document.getElementById("pannellum-viewer"),
   randomBtn: document.getElementById("random-btn"),
-  mappingBtn: document.getElementById("mapping-btn"),
+  viewerUsedCount: document.getElementById("viewer-used-count"),
+  viewerUsedList: document.getElementById("viewer-used-list"),
+  viewerMissingCount: document.getElementById("viewer-missing-count"),
+  viewerMissingList: document.getElementById("viewer-missing-list"),
 };
+
+function normalizeTilePath(urlLike) {
+  try {
+    return new URL(String(urlLike), window.location.origin).pathname;
+  } catch {
+    return String(urlLike || "");
+  }
+}
+
+function trackViewerTile(pathname) {
+  const path = normalizeTilePath(pathname);
+  if (!path.startsWith("/assets/viewer/panos/")) {
+    return;
+  }
+  if (!window.__viewerUsedTileSet) {
+    window.__viewerUsedTileSet = new Set();
+  }
+  if (!window.__viewerUsedTileOrder) {
+    window.__viewerUsedTileOrder = [];
+  }
+  if (!window.__viewerUsedTileSet.has(path)) {
+    window.__viewerUsedTileSet.add(path);
+    window.__viewerUsedTileOrder.push(path);
+  }
+}
+
+function installViewerUsageProbe() {
+  if (window.__viewerUsageProbeInstalled) {
+    return;
+  }
+  window.__viewerUsageProbeInstalled = true;
+  window.__viewerUsedTileSet = window.__viewerUsedTileSet || new Set();
+  window.__viewerUsedTileOrder = window.__viewerUsedTileOrder || [];
+
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  if (descriptor && descriptor.get && descriptor.set) {
+    Object.defineProperty(HTMLImageElement.prototype, "src", {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      get() {
+        return descriptor.get.call(this);
+      },
+      set(value) {
+        trackViewerTile(value);
+        descriptor.set.call(this, value);
+      },
+    });
+  }
+
+  const originalSetAttribute = HTMLImageElement.prototype.setAttribute;
+  HTMLImageElement.prototype.setAttribute = function patchedSetAttribute(name, value) {
+    if (String(name).toLowerCase() === "src") {
+      trackViewerTile(value);
+    }
+    return originalSetAttribute.call(this, name, value);
+  };
+}
+
+function getUsedTilesForScene(scene) {
+  if (!scene || !window.__viewerUsedTileOrder) {
+    return [];
+  }
+  const oldPrefix = `/assets/viewer/panos/${scene.panorama_id}/${scene.pano_stub}/`;
+  const krpanoPrefix = `/panoramas/${scene.panorama_id}/krpano/panos/${scene.pano_stub}.tiles/`;
+  return window.__viewerUsedTileOrder.filter((path) => {
+    if (!path.startsWith(oldPrefix) && !path.startsWith(krpanoPrefix)) {
+      return false;
+    }
+    // Focus usage stats on highest-detail tiles only.
+    return /\/l3\//.test(path) && /\.jpg$/.test(path);
+  });
+}
+
+/** 将 API 里的 /assets/viewer/panos/... 转为 krpano 实际请求的 /panoramas/.../krpano/panos/*.tiles/... */
+function viewerAliasToKrpanoTileUrl(legacyPath) {
+  const m = legacyPath.match(
+    /^\/assets\/viewer\/panos\/(\d+)\/([^/]+)\/(l\d)\/([fblrud])\/(\d+)\/(\d+)\.jpg$/,
+  );
+  if (!m) {
+    return null;
+  }
+  const [, pid, stub, levelTag, face, rowStr, colStr] = m;
+  const row = Number.parseInt(rowStr, 10);
+  const col = Number.parseInt(colStr, 10);
+  const vr = String(row + 1).padStart(2, "0");
+  const vc = String(col + 1).padStart(2, "0");
+  return `/panoramas/${pid}/krpano/panos/${stub}.tiles/${face}/${levelTag}/${vr}/${levelTag}_${face}_${vr}_${vc}.jpg`;
+}
+
+function getExpectedTilesForScene(scene) {
+  // Keep expected/missing debug view only for synthetic debug scene.
+  if (!scene || scene.scene_name !== "scene_debug_tiles") {
+    return [];
+  }
+  if (!scene || !scene.viewer_debug_tile_urls) {
+    return [];
+  }
+  const all = [];
+  for (const face of ["f", "b", "l", "r", "u", "d"]) {
+    for (const legacy of scene.viewer_debug_tile_urls[face] || []) {
+      const k = viewerAliasToKrpanoTileUrl(legacy);
+      if (k) {
+        all.push(k);
+      }
+    }
+  }
+  return all;
+}
+
+function getMissingTilesForScene(scene) {
+  const expected = getExpectedTilesForScene(scene);
+  const used = new Set(getUsedTilesForScene(scene));
+  return expected.filter((path) => !used.has(path));
+}
+
+function renderViewerUsedTiles(scene) {
+  if (!dom.viewerUsedList || !dom.viewerUsedCount) {
+    return;
+  }
+  const used = getUsedTilesForScene(scene);
+  dom.viewerUsedCount.textContent = String(used.length);
+  dom.viewerUsedList.innerHTML = "";
+  for (const path of used.slice(0, 160)) {
+    const link = document.createElement("a");
+    link.href = path;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = path;
+    dom.viewerUsedList.appendChild(link);
+  }
+
+  if (dom.viewerMissingList && dom.viewerMissingCount) {
+    const missing = getMissingTilesForScene(scene);
+    const expected = getExpectedTilesForScene(scene);
+    if (expected.length === 0) {
+      dom.viewerMissingCount.textContent = "-";
+      dom.viewerMissingList.innerHTML = "";
+    } else {
+      dom.viewerMissingCount.textContent = String(missing.length);
+      dom.viewerMissingList.innerHTML = "";
+      for (const path of missing.slice(0, 220)) {
+        const link = document.createElement("a");
+        link.href = path;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.textContent = path;
+        dom.viewerMissingList.appendChild(link);
+      }
+    }
+  }
+}
 
 function formatValue(value) {
   if (value === null || value === undefined || value === "") {
@@ -92,16 +244,24 @@ function renderDebugTiles(scene) {
 }
 
 function clearViewer() {
-  if (state.viewer && typeof state.viewer.destroy === "function") {
-    state.viewer.destroy();
+  if (state.usedTilesPollTimer) {
+    window.clearInterval(state.usedTilesPollTimer);
+    state.usedTilesPollTimer = null;
+  }
+  if (window.removepano) {
+    try {
+      window.removepano(state.krpanoViewerId);
+    } catch (error) {
+      console.warn("remove krpano failed", error);
+    }
   }
   state.viewer = null;
   dom.viewerCanvas.innerHTML = "";
 }
 
 function renderViewer(scene) {
-  if (!window.pannellum) {
-    dom.viewerCanvas.innerHTML = "<div class='viewer-error'>Pannellum 未加载，请检查 CDN 访问。</div>";
+  if (!window.embedpano) {
+    dom.viewerCanvas.innerHTML = "<div class='viewer-error'>krpano 未加载，请检查运行时文件。</div>";
     return;
   }
 
@@ -109,42 +269,39 @@ function renderViewer(scene) {
   dom.viewerFrame.classList.remove("is-ready");
   dom.viewerFrame.classList.add("is-loading");
 
-  const viewerConfig = {
-    default: {
-      firstScene: "current",
-      autoLoad: true,
-      showControls: true,
-      mouseZoom: "fullscreenonly",
-      backgroundColor: [0.04, 0.05, 0.09],
-      yaw: 0,
-      pitch: 0,
-      hfov: 95,
-    },
-    scenes: {
-      current: {
-        title: scene.scene_title || scene.scene_name || "未命名场景",
-        type: scene.viewer?.type || "multires",
-        multiRes: scene.viewer,
-      },
-    },
-  };
+  const isDebug = scene.scene_name === "scene_debug_tiles";
+  const tourXml = isDebug ? "/assets/debug_krpano_tour.xml" : "/assets/project_tour.xml";
+  const startScene = isDebug ? "scene_debug_tiles" : scene.scene_name;
 
   try {
-    state.viewer = window.pannellum.viewer(dom.viewerCanvas, viewerConfig);
-    state.viewer.on("load", () => {
-      dom.viewerFrame.classList.remove("is-loading");
-      dom.viewerFrame.classList.add("is-ready");
-      if (dom.viewerPlaceholder) {
-        dom.viewerPlaceholder.hidden = true;
-      }
-    });
-    state.viewer.on("error", (message) => {
-      dom.viewerFrame.classList.remove("is-loading");
-      dom.viewerFrame.classList.remove("is-ready");
-      if (dom.viewerPlaceholder) {
-        dom.viewerPlaceholder.hidden = false;
-      }
-      dom.viewerCanvas.innerHTML = `<div class='viewer-error'>${message}</div>`;
+    window.embedpano({
+      target: "pannellum-viewer",
+      id: state.krpanoViewerId,
+      xml: tourXml,
+      html5: "only",
+      mobilescale: 1.0,
+      passQueryParameters: false,
+      vars: {
+        startscene: startScene,
+      },
+      onready(krpano) {
+        state.viewer = krpano;
+        // BLEND(0) 减少场景切换时的短暂黑屏
+        krpano.call(`loadscene(${startScene}, null, MERGE, BLEND(0));`);
+        dom.viewerFrame.classList.remove("is-loading");
+        dom.viewerFrame.classList.add("is-ready");
+        if (dom.viewerPlaceholder) {
+          dom.viewerPlaceholder.hidden = true;
+        }
+      },
+      onerror(message) {
+        dom.viewerFrame.classList.remove("is-loading");
+        dom.viewerFrame.classList.remove("is-ready");
+        if (dom.viewerPlaceholder) {
+          dom.viewerPlaceholder.hidden = false;
+        }
+        dom.viewerCanvas.innerHTML = `<div class='viewer-error'>${message}</div>`;
+      },
     });
   } catch (error) {
     dom.viewerFrame.classList.remove("is-loading");
@@ -154,13 +311,6 @@ function renderViewer(scene) {
     }
     dom.viewerCanvas.innerHTML = `<div class='viewer-error'>${error.message}</div>`;
   }
-
-    window.setTimeout(() => {
-      const loadButton = dom.viewerCanvas.querySelector(".pnlm-load-button");
-      if (loadButton) {
-        loadButton.click();
-      }
-    }, 0);
 }
 
 function renderScene(scene) {
@@ -176,7 +326,18 @@ function renderScene(scene) {
   dom.boundsY.textContent = `Y: ${formatValue(state.bounds?.y_min)} → ${formatValue(state.bounds?.y_max)}`;
   renderDebugTiles(scene);
   renderViewer(scene);
-
+  renderViewerUsedTiles(scene);
+  window.setTimeout(() => renderViewerUsedTiles(scene), 1000);
+  window.setTimeout(() => renderViewerUsedTiles(scene), 2500);
+  if (state.usedTilesPollTimer) {
+    window.clearInterval(state.usedTilesPollTimer);
+  }
+  state.usedTilesPollTimer = window.setInterval(() => {
+    if (!state.currentScene || state.currentScene.scene_name !== scene.scene_name) {
+      return;
+    }
+    renderViewerUsedTiles(scene);
+  }, 1000);
   document.querySelectorAll(".scene-chip").forEach((button) => {
     button.classList.toggle("is-active", button.title === scene.scene_name);
   });
@@ -196,38 +357,6 @@ async function requestJson(url, options = {}) {
   return response.json();
 }
 
-function renderMappingButton() {
-  if (!dom.mappingBtn) {
-    return;
-  }
-  const mode = state.mapping.currentMode || "-";
-  dom.mappingBtn.textContent = `拼接调试：${mode}`;
-}
-
-async function refreshMappingState() {
-  const payload = await requestJson("/api/debug/mapping");
-  state.mapping.currentMode = payload.current_mode || null;
-  state.mapping.modes = Array.isArray(payload.modes) ? payload.modes : [];
-  renderMappingButton();
-}
-
-async function toggleMappingMode() {
-  const payload = await requestJson("/api/debug/mapping", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ action: "next" }),
-  });
-  state.mapping.currentMode = payload.current_mode || null;
-  state.mapping.modes = Array.isArray(payload.modes) ? payload.modes : [];
-  renderMappingButton();
-
-  if (state.currentScene?.scene_name) {
-    await loadScene(state.currentScene.scene_name);
-  }
-}
-
 async function loadScene(sceneName) {
   const scene = await requestJson(`/api/scenes/${encodeURIComponent(sceneName)}`);
   renderScene(scene);
@@ -239,6 +368,7 @@ async function loadRandomScene() {
 }
 
 async function init() {
+  installViewerUsageProbe();
   const config = await requestJson("/api/config");
   const scenesResponse = await requestJson("/api/scenes?limit=20");
 
@@ -247,9 +377,6 @@ async function init() {
 
   dom.sceneCount.textContent = formatValue(scenesResponse.total);
   dom.inventoryCount.textContent = formatValue(config.inventory_count);
-  state.mapping.currentMode = config.mapping_mode || null;
-  state.mapping.modes = Array.isArray(config.mapping_modes) ? config.mapping_modes : [];
-  renderMappingButton();
 
   renderSceneList();
   if (config.default_scene_name) {
@@ -269,23 +396,6 @@ async function init() {
     }
   });
 
-  if (dom.mappingBtn) {
-    dom.mappingBtn.addEventListener("click", async () => {
-      dom.mappingBtn.disabled = true;
-      const originalText = dom.mappingBtn.textContent;
-      dom.mappingBtn.textContent = "拼接调试：切换中...";
-      try {
-        await toggleMappingMode();
-      } finally {
-        dom.mappingBtn.disabled = false;
-        if (dom.mappingBtn.textContent === "拼接调试：切换中...") {
-          dom.mappingBtn.textContent = originalText;
-        }
-      }
-    });
-  }
-
-  await refreshMappingState();
 }
 
 init().catch((error) => {

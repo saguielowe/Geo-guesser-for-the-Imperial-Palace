@@ -4,7 +4,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>寻迹故宫 - 本地 MVP</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -39,7 +38,6 @@
               <h2 id="scene-title">加载中</h2>
             </div>
             <div class="viewer-actions">
-              <button id="mapping-btn" class="button" type="button">拼接调试：-</button>
               <button id="random-btn" class="button button-primary" type="button">随机场景</button>
             </div>
           </div>
@@ -77,6 +75,16 @@
               <code id="debug-level">-</code>
             </div>
             <div class="debug-tile-list" id="debug-tile-list"></div>
+            <div class="tile-template-head" style="margin-top: 12px;">
+              <span>Viewer 实际用图</span>
+              <code id="viewer-used-count">0</code>
+            </div>
+            <div class="debug-url-grid" id="viewer-used-list"></div>
+            <div class="tile-template-head" style="margin-top: 12px;">
+              <span>Viewer 未用图（Expected - Used）</span>
+              <code id="viewer-missing-count">0</code>
+            </div>
+            <div class="debug-url-grid" id="viewer-missing-list"></div>
           </div>
         </section>
 
@@ -124,7 +132,7 @@
       </main>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+    <script src="/assets/vendor/krpano.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>
