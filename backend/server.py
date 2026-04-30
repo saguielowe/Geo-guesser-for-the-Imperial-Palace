@@ -802,11 +802,11 @@ class AppHandler(BaseHTTPRequestHandler):
     def log_request(self, code: Any = "-", size: Any = "-") -> None:
         append_request_log(self.requestline, code, size, {key: value for key, value in self.headers.items()})
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(self, status: int, body: bytes, content_type: str, cache_control: str = "no-store") -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(body)
 
@@ -829,7 +829,13 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         content_type, _ = mimetypes.guess_type(path.name)
         body = path.read_bytes()
-        self._send(HTTPStatus.OK, body, content_type or "application/octet-stream")
+        suffix = path.suffix.lower()
+        if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+            # Tile / preview files can be safely cached to reduce drag-time re-fetch stalls.
+            cache_control = "public, max-age=86400"
+        else:
+            cache_control = "no-store"
+        self._send(HTTPStatus.OK, body, content_type or "application/octet-stream", cache_control=cache_control)
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)

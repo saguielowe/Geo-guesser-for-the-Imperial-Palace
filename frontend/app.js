@@ -3,6 +3,11 @@ const state = {
   currentScene: null,
   bounds: null,
   viewer: null,
+  map: null,
+  mapLayer: null,
+  truthMarker: null,
+  guessMarker: null,
+  lastGuessCoord: null,
   usedTilesPollTimer: null,
   krpanoViewerId: "krpano_viewer",
 };
@@ -19,6 +24,8 @@ const dom = {
   coordY: document.getElementById("coord-y"),
   boundsX: document.getElementById("bounds-x"),
   boundsY: document.getElementById("bounds-y"),
+  guessX: document.getElementById("guess-x"),
+  guessY: document.getElementById("guess-y"),
 
   debugLevel: document.getElementById("debug-level"),
   debugTileList: document.getElementById("debug-tile-list"),
@@ -31,6 +38,9 @@ const dom = {
   viewerUsedList: document.getElementById("viewer-used-list"),
   viewerMissingCount: document.getElementById("viewer-missing-count"),
   viewerMissingList: document.getElementById("viewer-missing-list"),
+  mapBox: document.querySelector(".map-box"),
+  mapPlaceholder: document.getElementById("map-placeholder"),
+  miniMap: document.getElementById("mini-map"),
 };
 
 function normalizeTilePath(urlLike) {
@@ -259,6 +269,149 @@ function clearViewer() {
   dom.viewerCanvas.innerHTML = "";
 }
 
+const MAP_MAX_ZOOM = 5;
+const MAP_MIN_ZOOM = 1;
+const MAP_TILE_SIZE = 256;
+const MAP_WORLD_SIZE = MAP_TILE_SIZE * 2 ** MAP_MAX_ZOOM;
+
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function getMapBounds() {
+  if (!state.map) {
+    return null;
+  }
+  const southWest = state.map.unproject([0, MAP_WORLD_SIZE], MAP_MAX_ZOOM);
+  const northEast = state.map.unproject([MAP_WORLD_SIZE, 0], MAP_MAX_ZOOM);
+  return window.L.latLngBounds(southWest, northEast);
+}
+
+function sceneCoordToPixel(scene) {
+  const xMin = Number(state.bounds?.x_min);
+  const xMax = Number(state.bounds?.x_max);
+  const yMin = Number(state.bounds?.y_min);
+  const yMax = Number(state.bounds?.y_max);
+  const x = Number(scene?.coordinate_x);
+  const y = Number(scene?.coordinate_y);
+  if (
+    !Number.isFinite(xMin) ||
+    !Number.isFinite(xMax) ||
+    !Number.isFinite(yMin) ||
+    !Number.isFinite(yMax) ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    xMax === xMin ||
+    yMax === yMin
+  ) {
+    return null;
+  }
+  const rx = clamp01((x - xMin) / (xMax - xMin));
+  const ry = clamp01((y - yMin) / (yMax - yMin));
+  return {
+    px: rx * MAP_WORLD_SIZE,
+    py: (1 - ry) * MAP_WORLD_SIZE,
+  };
+}
+
+function pixelToSceneCoord(px, py) {
+  const xMin = Number(state.bounds?.x_min);
+  const xMax = Number(state.bounds?.x_max);
+  const yMin = Number(state.bounds?.y_min);
+  const yMax = Number(state.bounds?.y_max);
+  if (
+    !Number.isFinite(xMin) ||
+    !Number.isFinite(xMax) ||
+    !Number.isFinite(yMin) ||
+    !Number.isFinite(yMax) ||
+    xMax === xMin ||
+    yMax === yMin
+  ) {
+    return null;
+  }
+  const rx = clamp01(px / MAP_WORLD_SIZE);
+  const ry = clamp01(1 - py / MAP_WORLD_SIZE);
+  return {
+    x: xMin + rx * (xMax - xMin),
+    y: yMin + ry * (yMax - yMin),
+  };
+}
+
+function updateGuessDisplay(guess) {
+  dom.guessX.textContent = guess ? formatValue(guess.x) : "-";
+  dom.guessY.textContent = guess ? formatValue(guess.y) : "-";
+}
+
+function createDotIcon(className) {
+  return window.L.divIcon({
+    className: "",
+    html: `<div class="${className}"></div>`,
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  });
+}
+
+function installMiniMap() {
+  if (!dom.miniMap || !window.L || state.map) {
+    return;
+  }
+  state.map = window.L.map(dom.miniMap, {
+    crs: window.L.CRS.Simple,
+    minZoom: MAP_MIN_ZOOM,
+    maxZoom: MAP_MAX_ZOOM,
+    zoomSnap: 1,
+    attributionControl: false,
+  });
+  const mapBounds = getMapBounds();
+  state.mapLayer = window.L.tileLayer("/assets/leaflet/tiles/{z}/tile_{x}_{y}.png", {
+    minZoom: MAP_MIN_ZOOM,
+    maxZoom: MAP_MAX_ZOOM,
+    tileSize: MAP_TILE_SIZE,
+    noWrap: true,
+    bounds: mapBounds || undefined,
+  });
+  state.mapLayer.addTo(state.map);
+  if (mapBounds) {
+    state.map.fitBounds(mapBounds, { animate: false });
+    state.map.setMaxBounds(mapBounds.pad(0.1));
+  }
+  state.map.on("click", (event) => {
+    const point = state.map.project(event.latlng, MAP_MAX_ZOOM);
+    const guess = pixelToSceneCoord(point.x, point.y);
+    state.lastGuessCoord = guess;
+    updateGuessDisplay(guess);
+    if (state.guessMarker) {
+      state.guessMarker.remove();
+    }
+    state.guessMarker = window.L.marker(event.latlng, {
+      icon: createDotIcon("guess-dot"),
+      title: "猜测点",
+    }).addTo(state.map);
+  });
+  dom.mapBox?.classList.add("is-ready");
+  if (dom.mapPlaceholder) {
+    dom.mapPlaceholder.hidden = true;
+  }
+}
+
+function renderMapForScene(scene) {
+  if (!state.map) {
+    return;
+  }
+  const pixel = sceneCoordToPixel(scene);
+  if (!pixel) {
+    return;
+  }
+  const latlng = state.map.unproject([pixel.px, pixel.py], MAP_MAX_ZOOM);
+  if (state.truthMarker) {
+    state.truthMarker.remove();
+  }
+  state.truthMarker = window.L.marker(latlng, {
+    icon: createDotIcon("truth-dot"),
+    title: "场景真值点",
+  }).addTo(state.map);
+}
+
 function renderViewer(scene) {
   if (!window.embedpano) {
     dom.viewerCanvas.innerHTML = "<div class='viewer-error'>krpano 未加载，请检查运行时文件。</div>";
@@ -324,8 +477,10 @@ function renderScene(scene) {
   dom.coordY.textContent = formatValue(scene.coordinate_y);
   dom.boundsX.textContent = `X: ${formatValue(state.bounds?.x_min)} → ${formatValue(state.bounds?.x_max)}`;
   dom.boundsY.textContent = `Y: ${formatValue(state.bounds?.y_min)} → ${formatValue(state.bounds?.y_max)}`;
+  updateGuessDisplay(state.lastGuessCoord);
   renderDebugTiles(scene);
   renderViewer(scene);
+  renderMapForScene(scene);
   renderViewerUsedTiles(scene);
   window.setTimeout(() => renderViewerUsedTiles(scene), 1000);
   window.setTimeout(() => renderViewerUsedTiles(scene), 2500);
@@ -374,6 +529,10 @@ async function init() {
 
   state.scenes = scenesResponse.items || [];
   state.bounds = config.bounds;
+  installMiniMap();
+  if (!state.map && dom.mapPlaceholder) {
+    dom.mapPlaceholder.innerHTML = "<p>地图运行时未加载（Leaflet 缺失）。</p><p>请先下载 /assets/vendor/leaflet.js 与 /assets/vendor/leaflet.css。</p>";
+  }
 
   dom.sceneCount.textContent = formatValue(scenesResponse.total);
   dom.inventoryCount.textContent = formatValue(config.inventory_count);

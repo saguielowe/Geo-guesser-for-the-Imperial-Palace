@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>寻迹故宫 - 本地 MVP</title>
+    <link rel="stylesheet" href="/assets/vendor/leaflet.css" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -97,10 +98,11 @@
           </div>
 
           <div class="map-box">
-            <div class="map-placeholder">
+            <div class="map-placeholder" id="map-placeholder">
               <p>这里会放故宫地图、点击落点和评分结果。</p>
               <p>当前先展示后端返回的坐标与边界。</p>
             </div>
+            <div id="mini-map" class="map-canvas"></div>
           </div>
 
           <div class="details-grid compact">
@@ -120,6 +122,14 @@
               <span>Y 范围</span>
               <strong id="bounds-y">-</strong>
             </div>
+            <div class="detail-card">
+              <span>猜测 X</span>
+              <strong id="guess-x">-</strong>
+            </div>
+            <div class="detail-card">
+              <span>猜测 Y</span>
+              <strong id="guess-y">-</strong>
+            </div>
           </div>
 
           <div class="scene-list-block">
@@ -132,6 +142,7 @@
       </main>
     </div>
 
+    <script src="/assets/vendor/leaflet.js"></script>
     <script src="/assets/vendor/krpano.js"></script>
     <script src="/app.js"></script>
   </body>
