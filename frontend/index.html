@@ -95,6 +95,10 @@
               <p class="panel-kicker">地图数据</p>
               <h2>下一阶段接入</h2>
             </div>
+            <div class="viewer-actions">
+              <button id="map-recenter-btn" class="button" type="button">一键回中</button>
+              <button id="anchor-mode-btn" class="button" type="button">采点模式：关</button>
+            </div>
           </div>
 
           <div class="map-box">
@@ -137,6 +141,13 @@
               <span>候选场景</span>
             </div>
             <div class="scene-list" id="scene-list"></div>
+          </div>
+
+          <div class="scene-list-block">
+            <div class="scene-list-head">
+              <span>采点输出（校准锚点）</span>
+            </div>
+            <textarea id="anchor-output" class="anchor-output" readonly>[]</textarea>
           </div>
         </aside>
       </main>

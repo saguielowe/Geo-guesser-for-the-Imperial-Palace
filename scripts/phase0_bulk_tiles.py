@@ -347,6 +347,16 @@ def main() -> int:
     parser.add_argument("--sleep", type=float, default=0.8, help="Retry wait seconds")
     parser.add_argument("--workers", type=int, default=8, help="Concurrent download workers for full mode")
     parser.add_argument(
+        "--exclude-panorama-ids",
+        default="",
+        help="Comma panorama ids to skip, e.g. 20,47",
+    )
+    parser.add_argument(
+        "--scene-name-contains",
+        default="",
+        help="Optional substring filter for scene_name (case-insensitive)",
+    )
+    parser.add_argument(
         "--allow-all",
         action="store_true",
         help="Allow full download for all discovered scenes when scene-limit is 0",
@@ -378,9 +388,22 @@ def main() -> int:
 
     estimate = summarize_estimate(scenes, levels)
 
-    selected = scenes
+    exclude_panorama_ids = {
+        int(token.strip())
+        for token in str(args.exclude_panorama_ids).split(",")
+        if token.strip().isdigit()
+    }
+    scene_name_contains = str(args.scene_name_contains or "").strip().lower()
+
+    filtered = scenes
+    if exclude_panorama_ids:
+        filtered = [sc for sc in filtered if int(sc.get("panorama_id") or -1) not in exclude_panorama_ids]
+    if scene_name_contains:
+        filtered = [sc for sc in filtered if scene_name_contains in str(sc.get("scene_name") or "").lower()]
+
+    selected = filtered
     if args.scene_limit > 0:
-        selected = scenes[: args.scene_limit]
+        selected = filtered[: args.scene_limit]
 
     if args.download_mode == "full" and args.scene_limit == 0 and not args.allow_all:
         raise RuntimeError(
@@ -405,6 +428,7 @@ def main() -> int:
         "levels": levels,
         "download_mode": args.download_mode,
         "scene_count_total": len(scenes),
+        "scene_count_filtered": len(filtered),
         "scene_count_selected": len(selected),
         "estimate": estimate,
         "downloaded": sum(1 for r in tile_manifest if r.status == "downloaded"),

@@ -8,6 +8,10 @@ const state = {
   truthMarker: null,
   guessMarker: null,
   lastGuessCoord: null,
+  mapTransform: null,
+  mapPickMode: false,
+  anchorSamples: [],
+  mapFocusBounds: null,
   usedTilesPollTimer: null,
   krpanoViewerId: "krpano_viewer",
 };
@@ -41,6 +45,9 @@ const dom = {
   mapBox: document.querySelector(".map-box"),
   mapPlaceholder: document.getElementById("map-placeholder"),
   miniMap: document.getElementById("mini-map"),
+  mapRecenterBtn: document.getElementById("map-recenter-btn"),
+  anchorModeBtn: document.getElementById("anchor-mode-btn"),
+  anchorOutput: document.getElementById("anchor-output"),
 };
 
 function normalizeTilePath(urlLike) {
@@ -274,72 +281,104 @@ const MAP_MIN_ZOOM = 1;
 const MAP_TILE_SIZE = 256;
 const MAP_WORLD_SIZE = MAP_TILE_SIZE * 2 ** MAP_MAX_ZOOM;
 
-function clamp01(value) {
-  return Math.min(1, Math.max(0, value));
-}
-
-function getMapBounds() {
-  if (!state.map) {
+function normalizeMapTransform(payload) {
+  const affine = payload?.affine || payload?.transform || null;
+  if (!affine) {
     return null;
   }
-  const southWest = state.map.unproject([0, MAP_WORLD_SIZE], MAP_MAX_ZOOM);
-  const northEast = state.map.unproject([MAP_WORLD_SIZE, 0], MAP_MAX_ZOOM);
-  return window.L.latLngBounds(southWest, northEast);
-}
-
-function sceneCoordToPixel(scene) {
-  const xMin = Number(state.bounds?.x_min);
-  const xMax = Number(state.bounds?.x_max);
-  const yMin = Number(state.bounds?.y_min);
-  const yMax = Number(state.bounds?.y_max);
-  const x = Number(scene?.coordinate_x);
-  const y = Number(scene?.coordinate_y);
-  if (
-    !Number.isFinite(xMin) ||
-    !Number.isFinite(xMax) ||
-    !Number.isFinite(yMin) ||
-    !Number.isFinite(yMax) ||
-    !Number.isFinite(x) ||
-    !Number.isFinite(y) ||
-    xMax === xMin ||
-    yMax === yMin
-  ) {
+  const values = [affine.a, affine.b, affine.c, affine.d, affine.e, affine.f].map((v) => Number(v));
+  if (values.some((v) => !Number.isFinite(v))) {
     return null;
   }
-  const rx = clamp01((x - xMin) / (xMax - xMin));
-  const ry = clamp01((y - yMin) / (yMax - yMin));
+  const [a, b, c, d, e, f] = values;
+  const det = a * e - b * d;
+  if (Math.abs(det) < 1e-9) {
+    return null;
+  }
+  return { a, b, c, d, e, f, det };
+}
+
+function applyCoordToMapPixel(coordX, coordY) {
+  const x = Number(coordX);
+  const y = Number(coordY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+  const t = state.mapTransform;
+  if (!t) {
+    return null;
+  }
   return {
-    px: rx * MAP_WORLD_SIZE,
-    py: (1 - ry) * MAP_WORLD_SIZE,
+    px: t.a * x + t.b * y + t.c,
+    py: t.d * x + t.e * y + t.f,
   };
 }
 
-function pixelToSceneCoord(px, py) {
-  const xMin = Number(state.bounds?.x_min);
-  const xMax = Number(state.bounds?.x_max);
-  const yMin = Number(state.bounds?.y_min);
-  const yMax = Number(state.bounds?.y_max);
-  if (
-    !Number.isFinite(xMin) ||
-    !Number.isFinite(xMax) ||
-    !Number.isFinite(yMin) ||
-    !Number.isFinite(yMax) ||
-    xMax === xMin ||
-    yMax === yMin
-  ) {
+function applyMapPixelToCoord(pixelX, pixelY) {
+  const px = Number(pixelX);
+  const py = Number(pixelY);
+  if (!Number.isFinite(px) || !Number.isFinite(py)) {
     return null;
   }
-  const rx = clamp01(px / MAP_WORLD_SIZE);
-  const ry = clamp01(1 - py / MAP_WORLD_SIZE);
+  const t = state.mapTransform;
+  if (!t) {
+    return null;
+  }
+  const dx = px - t.c;
+  const dy = py - t.f;
   return {
-    x: xMin + rx * (xMax - xMin),
-    y: yMin + ry * (yMax - yMin),
+    x: (t.e * dx - t.b * dy) / t.det,
+    y: (-t.d * dx + t.a * dy) / t.det,
   };
 }
 
 function updateGuessDisplay(guess) {
   dom.guessX.textContent = guess ? formatValue(guess.x) : "-";
   dom.guessY.textContent = guess ? formatValue(guess.y) : "-";
+}
+
+function updateAnchorOutput() {
+  if (!dom.anchorOutput) {
+    return;
+  }
+  dom.anchorOutput.value = JSON.stringify(state.anchorSamples, null, 2);
+}
+
+function getSceneFocusBounds() {
+  if (!state.map || !state.mapTransform || !state.scenes.length) {
+    return null;
+  }
+  const points = state.scenes
+    .map((scene) => applyCoordToMapPixel(scene.coordinate_x, scene.coordinate_y))
+    .filter((point) => point && Number.isFinite(point.px) && Number.isFinite(point.py));
+  if (!points.length) {
+    return null;
+  }
+  const xs = points.map((p) => p.px);
+  const ys = points.map((p) => p.py);
+  const pad = 180;
+  const minX = Math.max(0, Math.min(...xs) - pad);
+  const maxX = Math.min(MAP_WORLD_SIZE, Math.max(...xs) + pad);
+  const minY = Math.max(0, Math.min(...ys) - pad);
+  const maxY = Math.min(MAP_WORLD_SIZE, Math.max(...ys) + pad);
+  const sw = state.map.unproject([minX, maxY], MAP_MAX_ZOOM);
+  const ne = state.map.unproject([maxX, minY], MAP_MAX_ZOOM);
+  return window.L.latLngBounds(sw, ne);
+}
+
+function recenterMiniMap() {
+  if (!state.map || !state.mapFocusBounds) {
+    return;
+  }
+  state.map.fitBounds(state.mapFocusBounds, { animate: false, padding: [8, 8] });
+}
+
+function setMapPickMode(enabled) {
+  state.mapPickMode = Boolean(enabled);
+  if (dom.anchorModeBtn) {
+    dom.anchorModeBtn.textContent = `采点模式：${state.mapPickMode ? "开" : "关"}`;
+    dom.anchorModeBtn.classList.toggle("is-active", state.mapPickMode);
+  }
 }
 
 function createDotIcon(className) {
@@ -357,27 +396,38 @@ function installMiniMap() {
   }
   state.map = window.L.map(dom.miniMap, {
     crs: window.L.CRS.Simple,
+    center: [0, 0],
+    zoom: MAP_MIN_ZOOM,
     minZoom: MAP_MIN_ZOOM,
     maxZoom: MAP_MAX_ZOOM,
-    zoomSnap: 1,
+    zoomSnap: 0.1,
+    zoomDelta: 0.2,
+    wheelPxPerZoomLevel: 120,
     attributionControl: false,
+    zoomControl: false,
+    preferCanvas: true,
   });
-  const mapBounds = getMapBounds();
+  const southWest = state.map.unproject([0, MAP_WORLD_SIZE], MAP_MAX_ZOOM);
+  const northEast = state.map.unproject([MAP_WORLD_SIZE, 0], MAP_MAX_ZOOM);
+  const mapBounds = window.L.latLngBounds(southWest, northEast);
   state.mapLayer = window.L.tileLayer("/assets/leaflet/tiles/{z}/tile_{x}_{y}.png", {
     minZoom: MAP_MIN_ZOOM,
     maxZoom: MAP_MAX_ZOOM,
     tileSize: MAP_TILE_SIZE,
     noWrap: true,
-    bounds: mapBounds || undefined,
+    bounds: mapBounds,
   });
   state.mapLayer.addTo(state.map);
-  if (mapBounds) {
-    state.map.fitBounds(mapBounds, { animate: false });
-    state.map.setMaxBounds(mapBounds.pad(0.1));
+  state.map.fitBounds(mapBounds, { animate: false, padding: [8, 8] });
+  state.map.setMaxBounds(mapBounds.pad(0.25));
+  state.map.invalidateSize();
+  state.mapFocusBounds = getSceneFocusBounds();
+  if (state.mapFocusBounds) {
+    recenterMiniMap();
   }
   state.map.on("click", (event) => {
     const point = state.map.project(event.latlng, MAP_MAX_ZOOM);
-    const guess = pixelToSceneCoord(point.x, point.y);
+    const guess = applyMapPixelToCoord(point.x, point.y);
     state.lastGuessCoord = guess;
     updateGuessDisplay(guess);
     if (state.guessMarker) {
@@ -387,6 +437,20 @@ function installMiniMap() {
       icon: createDotIcon("guess-dot"),
       title: "猜测点",
     }).addTo(state.map);
+    if (state.mapPickMode && state.currentScene) {
+      const sample = {
+        scene_name: state.currentScene.scene_name,
+        map_px: Number(point.x.toFixed(2)),
+        map_py: Number(point.y.toFixed(2)),
+      };
+      const i = state.anchorSamples.findIndex((row) => row.scene_name === sample.scene_name);
+      if (i >= 0) {
+        state.anchorSamples[i] = sample;
+      } else {
+        state.anchorSamples.push(sample);
+      }
+      updateAnchorOutput();
+    }
   });
   dom.mapBox?.classList.add("is-ready");
   if (dom.mapPlaceholder) {
@@ -398,7 +462,7 @@ function renderMapForScene(scene) {
   if (!state.map) {
     return;
   }
-  const pixel = sceneCoordToPixel(scene);
+  const pixel = applyCoordToMapPixel(scene?.coordinate_x, scene?.coordinate_y);
   if (!pixel) {
     return;
   }
@@ -526,12 +590,23 @@ async function init() {
   installViewerUsageProbe();
   const config = await requestJson("/api/config");
   const scenesResponse = await requestJson("/api/scenes?limit=20");
+  try {
+    const transformPayload = await requestJson("/assets/map_transform.json");
+    state.mapTransform = normalizeMapTransform(transformPayload);
+  } catch {
+    state.mapTransform = null;
+  }
 
   state.scenes = scenesResponse.items || [];
   state.bounds = config.bounds;
+  state.mapFocusBounds = null;
   installMiniMap();
   if (!state.map && dom.mapPlaceholder) {
     dom.mapPlaceholder.innerHTML = "<p>地图运行时未加载（Leaflet 缺失）。</p><p>请先下载 /assets/vendor/leaflet.js 与 /assets/vendor/leaflet.css。</p>";
+  } else if (!state.mapTransform && dom.mapPlaceholder) {
+    dom.mapPlaceholder.innerHTML = "<p>缺少 map_transform.json，地图仅显示底图。</p><p>请先运行校准脚本生成仿射映射。</p>";
+    dom.mapPlaceholder.hidden = false;
+    dom.mapBox?.classList.remove("is-ready");
   }
 
   dom.sceneCount.textContent = formatValue(scenesResponse.total);
@@ -554,6 +629,14 @@ async function init() {
       dom.randomBtn.textContent = "随机场景";
     }
   });
+  dom.mapRecenterBtn?.addEventListener("click", () => {
+    recenterMiniMap();
+  });
+  dom.anchorModeBtn?.addEventListener("click", () => {
+    setMapPickMode(!state.mapPickMode);
+  });
+  setMapPickMode(false);
+  updateAnchorOutput();
 
 }
 
