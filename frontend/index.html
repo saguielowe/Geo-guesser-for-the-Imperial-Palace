@@ -13,7 +13,7 @@
         <div>
           <p class="eyebrow">Local Backend + Viewer MVP</p>
           <h1>寻迹故宫</h1>
-          <p class="subtitle">先打通场景 API、坐标、瓦片入口，再接 360 viewer 和地图回合。</p>
+          <p class="subtitle">MVP 收尾版：20 个 summer 场景题库，360 全景 + 宫图定位。</p>
         </div>
         <div class="hero-stats" id="hero-stats">
           <div class="stat-card">
@@ -25,8 +25,8 @@
             <strong id="inventory-count">-</strong>
           </div>
           <div class="stat-card">
-            <span>地图阶段</span>
-            <strong>待接入</strong>
+            <span>版本状态</span>
+            <strong>MVP Ready</strong>
           </div>
         </div>
       </header>
@@ -35,7 +35,7 @@
         <section class="panel viewer-panel">
           <div class="panel-head">
             <div>
-              <p class="panel-kicker">360 Viewer 接入位</p>
+              <p class="panel-kicker">360 Viewer</p>
               <h2 id="scene-title">加载中</h2>
             </div>
             <div class="viewer-actions">
@@ -70,41 +70,24 @@
             </div>
           </div>
 
-          <div class="tile-template-block debug-block">
-            <div class="tile-template-head">
-              <span>l3 请求清单</span>
-              <code id="debug-level">-</code>
-            </div>
-            <div class="debug-tile-list" id="debug-tile-list"></div>
-            <div class="tile-template-head" style="margin-top: 12px;">
-              <span>Viewer 实际用图</span>
-              <code id="viewer-used-count">0</code>
-            </div>
-            <div class="debug-url-grid" id="viewer-used-list"></div>
-            <div class="tile-template-head" style="margin-top: 12px;">
-              <span>Viewer 未用图（Expected - Used）</span>
-              <code id="viewer-missing-count">0</code>
-            </div>
-            <div class="debug-url-grid" id="viewer-missing-list"></div>
-          </div>
         </section>
 
         <aside class="panel map-panel">
           <div class="panel-head">
             <div>
-              <p class="panel-kicker">地图数据</p>
-              <h2>下一阶段接入</h2>
+              <p class="panel-kicker">宫图定位</p>
+              <h2>点击下点，估计位置</h2>
             </div>
             <div class="viewer-actions">
               <button id="map-recenter-btn" class="button" type="button">一键回中</button>
-              <button id="anchor-mode-btn" class="button" type="button">采点模式：关</button>
+              <button id="submit-guess-btn" class="button button-primary" type="button">提交猜测</button>
             </div>
           </div>
 
           <div class="map-box">
             <div class="map-placeholder" id="map-placeholder">
-              <p>这里会放故宫地图、点击落点和评分结果。</p>
-              <p>当前先展示后端返回的坐标与边界。</p>
+              <p>宫图初始化中...</p>
+              <p>若长时间空白，请刷新页面。</p>
             </div>
             <div id="mini-map" class="map-canvas"></div>
           </div>
@@ -119,20 +102,20 @@
               <strong id="coord-y">-</strong>
             </div>
             <div class="detail-card">
-              <span>X 范围</span>
-              <strong id="bounds-x">-</strong>
-            </div>
-            <div class="detail-card">
-              <span>Y 范围</span>
-              <strong id="bounds-y">-</strong>
-            </div>
-            <div class="detail-card">
               <span>猜测 X</span>
               <strong id="guess-x">-</strong>
             </div>
             <div class="detail-card">
               <span>猜测 Y</span>
               <strong id="guess-y">-</strong>
+            </div>
+            <div class="detail-card">
+              <span>误差距离</span>
+              <strong id="guess-distance">-</strong>
+            </div>
+            <div class="detail-card">
+              <span>本题得分</span>
+              <strong id="guess-score">-</strong>
             </div>
           </div>
 
@@ -143,12 +126,6 @@
             <div class="scene-list" id="scene-list"></div>
           </div>
 
-          <div class="scene-list-block">
-            <div class="scene-list-head">
-              <span>采点输出（校准锚点）</span>
-            </div>
-            <textarea id="anchor-output" class="anchor-output" readonly>[]</textarea>
-          </div>
         </aside>
       </main>
     </div>

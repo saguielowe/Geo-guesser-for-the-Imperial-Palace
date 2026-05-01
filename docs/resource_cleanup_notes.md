@@ -34,3 +34,8 @@
 - 不再执行全量下载。
 - MVP 仅使用 `scene_catalog.mvp20.local.json` 中的 20 个场景。
 - 下一阶段目标转为 viewer 接入与题库玩法闭环，不再扩充抓取范围。
+
+## 2026-05-01 review 补充
+- 发现 `scene_3170_summer` 在 `scene_catalog.phase0.json` 中缺失坐标字段（`coordinate/x_axis/y_axis` 为空），无法用于地图真值定位。
+- 处理策略：不再强行保留该点，已从 `scene_catalog.mvp20.local.json` 中替换为 `scene_2826_summer`（有完整坐标，且已下载对应 l3 tiles）。
+- 结果：MVP 20 场景当前均可用于地图定位显示。

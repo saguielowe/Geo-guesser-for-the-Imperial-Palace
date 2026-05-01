@@ -7,11 +7,13 @@ const state = {
   mapLayer: null,
   truthMarker: null,
   guessMarker: null,
+  guessLine: null,
   lastGuessCoord: null,
+  lastGuessLatLng: null,
   mapTransform: null,
-  mapPickMode: false,
-  anchorSamples: [],
   mapFocusBounds: null,
+  scoreValue: 0,
+  scoreAnimId: null,
   usedTilesPollTimer: null,
   krpanoViewerId: "krpano_viewer",
 };
@@ -26,10 +28,10 @@ const dom = {
   sceneSeasons: document.getElementById("scene-seasons"),
   coordX: document.getElementById("coord-x"),
   coordY: document.getElementById("coord-y"),
-  boundsX: document.getElementById("bounds-x"),
-  boundsY: document.getElementById("bounds-y"),
   guessX: document.getElementById("guess-x"),
   guessY: document.getElementById("guess-y"),
+  guessDistance: document.getElementById("guess-distance"),
+  guessScore: document.getElementById("guess-score"),
 
   debugLevel: document.getElementById("debug-level"),
   debugTileList: document.getElementById("debug-tile-list"),
@@ -46,8 +48,7 @@ const dom = {
   mapPlaceholder: document.getElementById("map-placeholder"),
   miniMap: document.getElementById("mini-map"),
   mapRecenterBtn: document.getElementById("map-recenter-btn"),
-  anchorModeBtn: document.getElementById("anchor-mode-btn"),
-  anchorOutput: document.getElementById("anchor-output"),
+  submitGuessBtn: document.getElementById("submit-guess-btn"),
 };
 
 function normalizeTilePath(urlLike) {
@@ -337,11 +338,101 @@ function updateGuessDisplay(guess) {
   dom.guessY.textContent = guess ? formatValue(guess.y) : "-";
 }
 
-function updateAnchorOutput() {
-  if (!dom.anchorOutput) {
+function resetRoundResultDisplay() {
+  if (dom.guessDistance) {
+    dom.guessDistance.textContent = "-";
+  }
+  if (dom.guessScore) {
+    dom.guessScore.textContent = "-";
+  }
+}
+
+function scoreByDistance(distance) {
+  if (!Number.isFinite(distance)) {
+    return 0;
+  }
+  const knots = [
+    { d: 5, s: 5000 },
+    { d: 10, s: 4500 },
+    { d: 20, s: 4000 },
+    { d: 40, s: 3000 },
+    { d: 80, s: 1500 },
+    { d: 160, s: 750 },
+  ];
+  if (distance <= knots[0].d) {
+    return 5000;
+  }
+  for (let i = 0; i < knots.length - 1; i += 1) {
+    const a = knots[i];
+    const b = knots[i + 1];
+    if (distance <= b.d) {
+      const t = (distance - a.d) / (b.d - a.d);
+      return Math.round(a.s + t * (b.s - a.s));
+    }
+  }
+  // Beyond 160 keep declining with last segment slope until 0.
+  const tailSlope = (knots[5].s - knots[4].s) / (knots[5].d - knots[4].d); // -9.375
+  const tail = knots[5].s + (distance - knots[5].d) * tailSlope;
+  return Math.max(0, Math.round(tail));
+}
+
+function animateScoreDisplay(targetScore) {
+  if (!dom.guessScore) {
     return;
   }
-  dom.anchorOutput.value = JSON.stringify(state.anchorSamples, null, 2);
+  if (state.scoreAnimId) {
+    window.cancelAnimationFrame(state.scoreAnimId);
+    state.scoreAnimId = null;
+  }
+  const start = Number(state.scoreValue) || 0;
+  const end = Math.max(0, Math.min(5000, Number(targetScore) || 0));
+  const durationMs = 550;
+  const startAt = performance.now();
+
+  function tick(now) {
+    const t = Math.min(1, (now - startAt) / durationMs);
+    const eased = 1 - (1 - t) ** 3;
+    const current = Math.round(start + (end - start) * eased);
+    dom.guessScore.textContent = `${current} / 5000`;
+    if (t < 1) {
+      state.scoreAnimId = window.requestAnimationFrame(tick);
+    } else {
+      state.scoreAnimId = null;
+      state.scoreValue = end;
+    }
+  }
+
+  state.scoreAnimId = window.requestAnimationFrame(tick);
+}
+
+function submitGuess() {
+  if (!state.currentScene || !state.lastGuessCoord || !state.map || !state.truthMarker || !state.lastGuessLatLng) {
+    return;
+  }
+  const tx = Number(state.currentScene.coordinate_x);
+  const ty = Number(state.currentScene.coordinate_y);
+  const gx = Number(state.lastGuessCoord.x);
+  const gy = Number(state.lastGuessCoord.y);
+  if (![tx, ty, gx, gy].every((v) => Number.isFinite(v))) {
+    return;
+  }
+  const distance = Math.hypot(gx - tx, gy - ty);
+  const score = scoreByDistance(distance);
+  if (dom.guessDistance) {
+    dom.guessDistance.textContent = distance.toFixed(2);
+  }
+  if (dom.guessScore) {
+    animateScoreDisplay(score);
+  }
+  if (state.guessLine) {
+    state.guessLine.remove();
+  }
+  state.guessLine = window.L.polyline([state.lastGuessLatLng, state.truthMarker.getLatLng()], {
+    color: "#f59e0b",
+    weight: 3,
+    opacity: 0.9,
+    dashArray: "7 6",
+  }).addTo(state.map);
 }
 
 function getSceneFocusBounds() {
@@ -371,14 +462,6 @@ function recenterMiniMap() {
     return;
   }
   state.map.fitBounds(state.mapFocusBounds, { animate: false, padding: [8, 8] });
-}
-
-function setMapPickMode(enabled) {
-  state.mapPickMode = Boolean(enabled);
-  if (dom.anchorModeBtn) {
-    dom.anchorModeBtn.textContent = `采点模式：${state.mapPickMode ? "开" : "关"}`;
-    dom.anchorModeBtn.classList.toggle("is-active", state.mapPickMode);
-  }
 }
 
 function createDotIcon(className) {
@@ -429,7 +512,13 @@ function installMiniMap() {
     const point = state.map.project(event.latlng, MAP_MAX_ZOOM);
     const guess = applyMapPixelToCoord(point.x, point.y);
     state.lastGuessCoord = guess;
+    state.lastGuessLatLng = event.latlng;
     updateGuessDisplay(guess);
+    resetRoundResultDisplay();
+    if (state.guessLine) {
+      state.guessLine.remove();
+      state.guessLine = null;
+    }
     if (state.guessMarker) {
       state.guessMarker.remove();
     }
@@ -437,20 +526,6 @@ function installMiniMap() {
       icon: createDotIcon("guess-dot"),
       title: "猜测点",
     }).addTo(state.map);
-    if (state.mapPickMode && state.currentScene) {
-      const sample = {
-        scene_name: state.currentScene.scene_name,
-        map_px: Number(point.x.toFixed(2)),
-        map_py: Number(point.y.toFixed(2)),
-      };
-      const i = state.anchorSamples.findIndex((row) => row.scene_name === sample.scene_name);
-      if (i >= 0) {
-        state.anchorSamples[i] = sample;
-      } else {
-        state.anchorSamples.push(sample);
-      }
-      updateAnchorOutput();
-    }
   });
   dom.mapBox?.classList.add("is-ready");
   if (dom.mapPlaceholder) {
@@ -474,6 +549,10 @@ function renderMapForScene(scene) {
     icon: createDotIcon("truth-dot"),
     title: "场景真值点",
   }).addTo(state.map);
+  if (state.guessLine) {
+    state.guessLine.remove();
+    state.guessLine = null;
+  }
 }
 
 function renderViewer(scene) {
@@ -532,6 +611,8 @@ function renderViewer(scene) {
 
 function renderScene(scene) {
   state.currentScene = scene;
+  state.lastGuessCoord = null;
+  state.lastGuessLatLng = null;
   dom.sceneTitle.textContent = scene.scene_title || scene.scene_name || "未命名场景";
   dom.sceneName.textContent = scene.scene_name || "-";
   dom.panoramaName.textContent = scene.panorama_name || "-";
@@ -539,9 +620,9 @@ function renderScene(scene) {
   dom.sceneSeasons.textContent = Array.isArray(scene.seasons) ? scene.seasons.join(", ") : "-";
   dom.coordX.textContent = formatValue(scene.coordinate_x);
   dom.coordY.textContent = formatValue(scene.coordinate_y);
-  dom.boundsX.textContent = `X: ${formatValue(state.bounds?.x_min)} → ${formatValue(state.bounds?.x_max)}`;
-  dom.boundsY.textContent = `Y: ${formatValue(state.bounds?.y_min)} → ${formatValue(state.bounds?.y_max)}`;
-  updateGuessDisplay(state.lastGuessCoord);
+  updateGuessDisplay(null);
+  state.scoreValue = 0;
+  resetRoundResultDisplay();
   renderDebugTiles(scene);
   renderViewer(scene);
   renderMapForScene(scene);
@@ -632,11 +713,7 @@ async function init() {
   dom.mapRecenterBtn?.addEventListener("click", () => {
     recenterMiniMap();
   });
-  dom.anchorModeBtn?.addEventListener("click", () => {
-    setMapPickMode(!state.mapPickMode);
-  });
-  setMapPickMode(false);
-  updateAnchorOutput();
+  dom.submitGuessBtn?.addEventListener("click", submitGuess);
 
 }
 
