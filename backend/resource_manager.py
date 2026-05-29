@@ -1,0 +1,362 @@
+"""后台资源管理：下载队列、预取、清理与占用统计。"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+PANORAMAS_DIR = RAW_DIR / "panoramas"
+LEAFLET_DIR = RAW_DIR / "leaflet"
+
+ANCHOR_CATALOG_PATH = PROCESSED_DIR / "scene_catalog.demo_anchors.local.json"
+KNOWLEDGE_PATH = PROCESSED_DIR / "scene_knowledge.json"
+ANCHOR_POINTS_PATH = PROCESSED_DIR / "map_anchor_points.captured.json"
+
+# ---- 缓存 ----
+_cache_lock = threading.Lock()
+_usage_cache: Optional[Dict[str, Any]] = None
+_usage_cache_ts: float = 0.0
+USAGE_CACHE_TTL = 120  # 秒
+
+
+def _read_json(path: Path) -> Any:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _get_anchored_scenes() -> Set[str]:
+    """返回已锚点的 scene_name 集合。"""
+    anchored: Set[str] = set()
+    catalog = _read_json(ANCHOR_CATALOG_PATH)
+    if isinstance(catalog, list):
+        for row in catalog:
+            name = str(row.get("scene_name") or "").strip()
+            if name:
+                anchored.add(name)
+    points = _read_json(ANCHOR_POINTS_PATH)
+    if isinstance(points, list):
+        for row in points:
+            name = str(row.get("scene_name") or "").strip()
+            if name:
+                anchored.add(name)
+    return anchored
+
+
+def _has_pixel_coord(scene: Dict[str, Any]) -> bool:
+    """场景是否有 click_pixel_xy 或 user_x/y 坐标（即有 pixel 级锚点）。"""
+    if scene.get("click_pixel_xy"):
+        return True
+    ux = scene.get("user_x")
+    uy = scene.get("user_y")
+    if ux is not None and uy is not None:
+        try:
+            if float(ux) and float(uy):
+                return True
+        except (ValueError, TypeError):
+            pass
+    return False
+
+
+def _count_pano_bytes(scene_dir: Path) -> int:
+    """递归统计全景目录占用字节数。"""
+    total = 0
+    try:
+        for root, _dirs, files in os.walk(scene_dir):
+            for f in files:
+                try:
+                    total += (scene_dir / root / f).stat().st_size if root != str(scene_dir) else (Path(root) / f).stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
+
+
+# Python 3.12+ walk 兼容
+try:
+    _os_walk = os.walk
+except Exception:
+    pass
+
+
+def _count_dir_bytes(dir_path: Path) -> int:
+    total = 0
+    if not dir_path.exists():
+        return 0
+    for root, _dirs, files in os.walk(str(dir_path)):
+        for f in files:
+            try:
+                total += (Path(root) / f).stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def compute_usage(force: bool = False) -> Dict[str, Any]:
+    """计算磁盘占用统计，缓存 120 秒。"""
+    global _usage_cache, _usage_cache_ts
+    now = time.time()
+    with _cache_lock:
+        if not force and _usage_cache is not None and (now - _usage_cache_ts) < USAGE_CACHE_TTL:
+            return _usage_cache
+
+    pano_mb = 0.0
+    other_mb = 0.0
+
+    # 全景瓦片
+    if PANORAMAS_DIR.exists():
+        for pid_dir in PANORAMAS_DIR.iterdir():
+            if not pid_dir.is_dir():
+                continue
+            pano_mb += _count_dir_bytes(pid_dir) / (1024 * 1024)
+
+    # 其它资源（宫图、JSON、脚本等）
+    for entry in RAW_DIR.iterdir():
+        if entry.name == "panoramas":
+            continue
+        if entry.is_dir():
+            other_mb += _count_dir_bytes(entry) / (1024 * 1024)
+        elif entry.is_file():
+            try:
+                other_mb += entry.stat().st_size / (1024 * 1024)
+            except OSError:
+                pass
+
+    with _cache_lock:
+        _usage_cache = {
+            "pano_mb": round(pano_mb, 1),
+            "other_mb": round(other_mb, 1),
+            "total_mb": round(pano_mb + other_mb, 1),
+            "cached_at": now,
+        }
+        _usage_cache_ts = now
+    return _usage_cache
+
+
+def _get_scene_pano_dir(scene: Dict[str, Any]) -> Optional[Path]:
+    pid = scene.get("panorama_id")
+    stub = scene.get("pano_stub")
+    if pid and stub:
+        return PANORAMAS_DIR / str(pid) / "tiles" / str(stub)
+    return None
+
+
+def list_local_scenes(catalog: List[Dict[str, Any]]) -> List[str]:
+    """返回本地已有瓦片的 scene_name 列表。"""
+    local: List[str] = []
+    for row in catalog:
+        d = _get_scene_pano_dir(row)
+        if d and d.exists():
+            local.append(str(row.get("scene_name") or ""))
+    return [n for n in local if n]
+
+
+def prefetch_scenes(
+    catalog: List[Dict[str, Any]],
+    *,
+    max_scenes: int = 5,
+    anchored: Optional[Set[str]] = None,
+) -> List[str]:
+    """
+    预取策略：优先已锚点 / 有 pixel 坐标的场景，其次非夏季，
+    跳过已本地存在的。
+    """
+    if anchored is None:
+        anchored = _get_anchored_scenes()
+
+    local_set = set(list_local_scenes(catalog))
+
+    def _priority(scene: Dict[str, Any]) -> Tuple[int, int]:
+        name = str(scene.get("scene_name") or "")
+        score = 0
+        if name in anchored:
+            score += 100
+        if _has_pixel_coord(scene):
+            score += 50
+        season = str(scene.get("season_hint") or "").lower()
+        if season and season != "summer":
+            score += 10
+        return (-score, 0)
+
+    candidates = [s for s in catalog if str(s.get("scene_name") or "") not in local_set]
+    candidates.sort(key=_priority)
+    return [str(s.get("scene_name") or "") for s in candidates[:max_scenes]]
+
+
+def prune_scenes(
+    catalog: List[Dict[str, Any]],
+    *,
+    max_mb: Optional[float] = None,
+    max_scenes: Optional[int] = None,
+    anchored: Optional[Set[str]] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """
+    清理策略：按场景数或容量清理，保护已锚点场景。
+    返回清理结果摘要。
+    """
+    if anchored is None:
+        anchored = _get_anchored_scenes()
+
+    usage = compute_usage(force=True)
+    local_names = list_local_scenes(catalog)
+    # 构建 name → dir 映射
+    name_to_dir: Dict[str, Path] = {}
+    name_to_size: Dict[str, float] = {}
+    for row in catalog:
+        name = str(row.get("scene_name") or "")
+        d = _get_scene_pano_dir(row)
+        if name and d and d.exists() and name in local_names:
+            name_to_dir[name] = d
+            name_to_size[name] = _count_dir_bytes(d) / (1024 * 1024)
+
+    # 排序：非锚点优先清理，然后按大小降序
+    def _prune_key(name: str) -> Tuple[int, float]:
+        return (0 if name in anchored else 1, -name_to_size.get(name, 0))
+
+    sorted_names = sorted(local_names, key=_prune_key)
+
+    pruned: List[str] = []
+    freed_mb = 0.0
+    remaining_count = len(sorted_names)
+
+    for name in sorted_names:
+        if max_scenes is not None and remaining_count <= max_scenes:
+            break
+        if max_mb is not None and usage["total_mb"] - freed_mb <= max_mb:
+            break
+        if name in anchored:
+            continue
+        d = name_to_dir.get(name)
+        if d and d.exists():
+            sz = name_to_size.get(name, 0)
+            if not dry_run:
+                try:
+                    shutil.rmtree(str(d))
+                except OSError:
+                    continue
+            pruned.append(name)
+            freed_mb += sz
+            remaining_count -= 1
+
+    return {
+        "pruned": pruned,
+        "pruned_count": len(pruned),
+        "freed_mb": round(freed_mb, 1),
+        "dry_run": dry_run,
+        "remaining_local_scenes": remaining_count,
+        "total_mb_after": round(usage["total_mb"] - freed_mb, 1),
+    }
+
+
+def load_knowledge() -> List[Dict[str, Any]]:
+    """加载建筑知识题库。"""
+    data = _read_json(KNOWLEDGE_PATH)
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def load_anchor_catalog() -> Optional[List[Dict[str, Any]]]:
+    """加载锚点题库 catalog（优先使用）。"""
+    data = _read_json(ANCHOR_CATALOG_PATH)
+    if isinstance(data, list):
+        return data
+    return None
+
+
+class DownloadQueue:
+    """简化的后台下载队列。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._queue: List[str] = []  # scene_name 列表
+        self._active: bool = False
+        self._current: Optional[str] = None
+        self._completed: List[str] = []
+        self._failed: List[Tuple[str, str]] = []  # (name, reason)
+        self._progress: Dict[str, float] = {}  # scene_name → 0..1
+
+    def enqueue(self, scene_names: List[str]) -> int:
+        with self._lock:
+            added = 0
+            for name in scene_names:
+                if name not in self._queue and name not in self._completed:
+                    self._queue.append(name)
+                    added += 1
+            return added
+
+    def status(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "active": self._active,
+                "current": self._current,
+                "queued": len(self._queue),
+                "completed": len(self._completed),
+                "failed": len(self._failed),
+                "queue": list(self._queue),
+                "progress": dict(self._progress),
+            }
+
+    def start(self, catalog: List[Dict[str, Any]]) -> None:
+        """启动后台下载线程。"""
+        with self._lock:
+            if self._active:
+                return
+            self._active = True
+
+        def _worker() -> None:
+            while True:
+                with self._lock:
+                    if not self._queue:
+                        self._active = False
+                        self._current = None
+                        return
+                    name = self._queue.pop(0)
+                    self._current = name
+                    self._progress[name] = 0.0
+
+                try:
+                    self._download_scene(name, catalog)
+                    with self._lock:
+                        self._completed.append(name)
+                        self._progress[name] = 1.0
+                except Exception as exc:
+                    with self._lock:
+                        self._failed.append((name, str(exc)))
+                        self._progress[name] = -1.0
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+
+    def _download_scene(self, scene_name: str, catalog: List[Dict[str, Any]]) -> None:
+        """调用现有下载脚本下载单个场景。"""
+        script = ROOT / "scripts" / "download_from_catalog.py"
+        if not script.exists():
+            raise FileNotFoundError(f"下载脚本不存在: {script}")
+        result = subprocess.run(
+            [sys.executable, str(script), "--scene", scene_name],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            cwd=str(ROOT),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")
+
+
+# 全局单例
+_queue = DownloadQueue()

@@ -1,5 +1,11 @@
 data/
 logs/
-./__pycache__/
+__pycache__/
 *.pyc
 *.jpg
+*.png
+electron/node_modules/
+electron/dist/
+_six_*.json
+_search_result.json
+_title_*.txt

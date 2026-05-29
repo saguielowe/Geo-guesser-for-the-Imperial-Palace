@@ -22,7 +22,23 @@ RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 FRONTEND_DIR = ROOT / "frontend"
 CATALOG_PATH = PROCESSED_DIR / "scene_catalog.mvp20.local.json"
+ANCHOR_CATALOG_PATH = PROCESSED_DIR / "scene_catalog.demo_anchors.local.json"
 INVENTORY_PATH = PROCESSED_DIR / "local_tiles_inventory.json"
+KNOWLEDGE_PATH = PROCESSED_DIR / "scene_knowledge.json"
+
+import sys as _sys
+_backend_dir = Path(__file__).resolve().parent
+if str(_backend_dir) not in _sys.path:
+    _sys.path.insert(0, str(_backend_dir))
+from resource_manager import (  # noqa: E402
+    compute_usage,
+    prefetch_scenes,
+    prune_scenes,
+    load_knowledge,
+    load_anchor_catalog,
+    _queue,
+    list_local_scenes,
+)
 TOUR_XML_PATH = RAW_DIR / "project_tour.xml"
 REQUEST_LOG_PATH = ROOT / "logs" / "viewer-network-requests.jsonl"
 REQUEST_LOG_LOCK = threading.Lock()
@@ -760,10 +776,17 @@ def resolve_viewer_tile_path(panorama_id: int, pano_stub: str, face: str, level:
 
 
 def load_state() -> Dict[str, Any]:
-    if not CATALOG_PATH.exists():
-        raise FileNotFoundError(f"Missing catalog: {CATALOG_PATH}")
+    # 优先使用锚点题库
+    catalog_path = CATALOG_PATH
+    catalog_source = "mvp20"
+    if ANCHOR_CATALOG_PATH.exists():
+        catalog_path = ANCHOR_CATALOG_PATH
+        catalog_source = "demo_anchors"
 
-    raw_catalog = read_json(CATALOG_PATH)
+    if not catalog_path.exists():
+        raise FileNotFoundError(f"Missing catalog: {catalog_path}")
+
+    raw_catalog = read_json(catalog_path)
     if not isinstance(raw_catalog, list):
         raise ValueError("scene catalog must be a list")
 
@@ -782,11 +805,14 @@ def load_state() -> Dict[str, Any]:
     }
 
     by_name = {scene["scene_name"]: scene for scene in scenes if scene.get("scene_name")}
+    playable = [s for s in scenes if (s.get("local_tile_count") or 0) > 0]
     return {
         "scenes": scenes,
         "by_name": by_name,
         "bounds": bounds,
         "inventory_count": len(inventory),
+        "playable_count": len(playable),
+        "catalog_source": catalog_source,
     }
 
 
@@ -855,6 +881,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "scene_count": len(STATE["scenes"]),
                     "inventory_count": STATE["inventory_count"],
+                    "playable_count": STATE["playable_count"],
+                    "catalog_source": STATE["catalog_source"],
                 },
             )
 
@@ -869,6 +897,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     "bounds": STATE["bounds"],
                     "scene_count": len(STATE["scenes"]),
                     "inventory_count": STATE["inventory_count"],
+                    "playable_count": STATE["playable_count"],
+                    "catalog_source": STATE["catalog_source"],
                     "default_scene_name": first_scene["scene_name"] if first_scene else None,
                     "mapping_mode": mapping_payload["current_mode"],
                     "mapping_modes": mapping_payload["modes"],
@@ -886,6 +916,61 @@ class AppHandler(BaseHTTPRequestHandler):
                     "scene_count": len(STATE["scenes"]),
                 },
             )
+
+        if pathname == "/api/knowledge":
+            try:
+                items = load_knowledge()
+                return self._send_json(HTTPStatus.OK, {"items": items, "total": len(items)})
+            except Exception as exc:
+                return self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+
+        if pathname == "/api/resources/status":
+            params = parse_qs(parsed.query)
+            include_usage = params.get("usage", ["0"])[0] == "1"
+            payload: Dict[str, Any] = {
+                "playable_count": STATE["playable_count"],
+                "total_scenes": len(STATE["scenes"]),
+                "catalog_source": STATE["catalog_source"],
+                "download_queue": _queue.status(),
+            }
+            if include_usage:
+                payload["usage"] = compute_usage()
+            return self._send_json(HTTPStatus.OK, payload)
+
+        if pathname == "/api/resources/prefetch":
+            prefetched = prefetch_scenes(STATE["scenes"], max_scenes=5)
+            _queue.enqueue(prefetched)
+            _queue.start(STATE["scenes"])
+            return self._send_json(
+                HTTPStatus.OK,
+                {
+                    "prefetched": prefetched,
+                    "queue_status": _queue.status(),
+                },
+            )
+
+        if pathname == "/api/resources/prune":
+            params = parse_qs(parsed.query)
+            max_mb = None
+            max_scenes = None
+            if params.get("max_mb"):
+                try:
+                    max_mb = float(params["max_mb"][0])
+                except ValueError:
+                    pass
+            if params.get("max_scenes"):
+                try:
+                    max_scenes = int(params["max_scenes"][0])
+                except ValueError:
+                    pass
+            dry_run = params.get("dry_run", ["0"])[0] == "1"
+            result = prune_scenes(STATE["scenes"], max_mb=max_mb, max_scenes=max_scenes, dry_run=dry_run)
+            return self._send_json(HTTPStatus.OK, result)
+
+        if pathname == "/api/resources/refresh":
+            # 强制刷新占用缓存
+            usage = compute_usage(force=True)
+            return self._send_json(HTTPStatus.OK, {"usage": usage})
 
         if pathname == "/api/scenes":
             params = parse_qs(parsed.query)
