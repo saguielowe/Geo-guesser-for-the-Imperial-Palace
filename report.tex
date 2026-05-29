@@ -1,0 +1,276 @@
+% !TEX program = xelatex
+\documentclass[UTF8,a4paper,12pt]{ctexart}
+\usepackage[a4paper,margin=2.4cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!70!black,
+  citecolor=blue!60!black
+}
+\graphicspath{{../report_assets/}}
+% 截图尚未放入时显示占位框
+\newcommand{\figplaceholder}[2][]{%
+  \IfFileExists{#2}{%
+    \includegraphics[#1]{#2}%
+  }{%
+    \fbox{%
+      \parbox[c][0.22\textheight][c]{0.92\linewidth}{%
+        \centering\small\texttt{#2}\\[0.6em]（待插入截图）%
+      }%
+    }%
+  }%
+}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  rulecolor=\color{gray!35}
+}
+% ===== 请修改以下信息 =====
+\title{\textbf{寻迹故宫}\\[0.4em]
+  \large 基于故宫数字全景的 GeoGuessr 风格定位游戏}
+\author{%
+  姓名：\underline{\hspace{3cm}} \quad
+  学号：\underline{\hspace{3cm}}\\[0.3em]
+  课程：\underline{\hspace{4cm}} \quad
+  日期：2026 年 5 月
+}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+  本项目「寻迹故宫」（Tracing the Forbidden City）在故宫官方数字全景资源（\url{https://pano.dpm.org.cn/}）基础上，实现了一款 GeoGuessr 风格的 Web 定位游戏：玩家观察 360° 全景，在离线故宫平面图上点击猜测位置，系统按误差计分并展示建筑知识。针对官方坐标与本地宫图瓦片不完全一致的问题，我们采集 34 个场景锚点，采用全局及分 panorama 仿射变换校正真值；前端集成 krpano 全景浏览与 Leaflet 宫图交互，后端 Python 提供静态资源与按需下载管理。当前版本 \textbf{1.0} 支持 34 个已锚点场景、季节/建筑问答、本地资源懒加载与报告演示模式。本文介绍项目背景、系统设计、坐标标定方法、主要功能与体验评估，并讨论局限与后续工作。
+  \vspace{0.5em}
+  \noindent\textbf{关键词：}数字文化遗产；全景浏览；地图定位；仿射标定；教育游戏
+\end{abstract}
+\section{引言}
+故宫博物院自 2015 年起逐步开放线上数字漫游，官方站点提供基于 krpano 的多季节 360° 全景与配套「小地图」标点。这类资源兼具文化展示与空间认知价值，但缺少面向公众的互动玩法。GeoGuessr 类游戏通过「看街景猜地图位置」训练空间推理，若迁移至故宫场景，可在娱乐中强化对中轴线、三大殿、御花园等空间结构的理解。
+本项目定位为通识课课程作品：在\textbf{不依赖官方站点在线可用性}的前提下，缓存必要瓦片于本地，完成可离线演示的完整游戏闭环；同时保留锚点标定、资源管理等可扩展接口，便于后续作为专业课前端项目的迭代基础。
+\section{需求与目标}
+\subsection{核心玩法}
+根据项目需求文档，最小可玩版本需实现：
+\begin{enumerate}[nosep]
+  \item 随机（或指定）抽取一个故宫 \texttt{scene}；
+  \item 在 360° viewer 中观察环境；
+  \item 在故宫平面图上点击猜测坐标；
+  \item 计算猜测与真值距离并输出分数；
+  \item 展示正确位置、建筑名称与知识点；
+  \item 进入下一题。
+\end{enumerate}
+\subsection{扩展目标（1.0 已实现）}
+\begin{itemize}[nosep]
+  \item \textbf{34 景锚点题库}：覆盖前三殿、箭亭、神武门、御花园等代表区域；
+  \item \textbf{季节小问}与\textbf{建筑知识问答}，答对额外加分；
+  \item \textbf{本地资源管理}：懒下载、磁盘占用统计、按容量/题数清理；
+  \item \textbf{报告演示模式}（\texttt{?report=1}）：隐藏开发向 UI，便于截图与答辩；
+  \item \textbf{满分反馈}：定位误差 $\le 5$（用户坐标单位）时触发 5000 分特效。
+\end{itemize}
+\section{系统架构}
+\subsection{总体结构}
+系统采用轻量前后端分离架构：浏览器加载 \texttt{frontend/} 静态页面；\texttt{backend/server.py} 基于 Python 标准库 \texttt{ThreadingHTTPServer} 提供 HTTP 服务，统一托管前端、本地瓦片、JSON 配置及 REST 风格 API。
+\begin{figure}[htbp]
+  \centering
+  \figplaceholder[width=0.92\linewidth]{01_home_overview.png}
+  \caption{系统主界面（报告演示模式）。左侧为 krpano 360° 全景，右侧为 Leaflet 宫图与问答区；顶栏可一键切换六处代表场景。}
+  \label{fig:home}
+\end{figure}
+
+主要目录与数据流如表~\ref{tab:dirs} 所示。
+\begin{table}[htbp]
+  \centering
+  \caption{主要目录与职责}
+  \label{tab:dirs}
+  \begin{tabular}{@{}ll@{}}
+    \toprule
+    路径 & 说明 \\
+    \midrule
+    \texttt{data/raw/panoramas/} & krpano 立方体全景瓦片（按 scene 分目录） \\
+    \texttt{data/raw/leaflet/tiles/} & 离线故宫平面图瓦片（Leaflet CRS.Simple） \\
+    \texttt{data/raw/map\_transform.json} & 全局 / 分 panorama 仿射参数 \\
+    \texttt{data/processed/scene\_catalog.*.json} & 可玩场景清单与元数据 \\
+    \texttt{data/processed/map\_anchor\_points.*.json} & 人工 / 采集锚点真值 \\
+    \texttt{data/processed/scene\_knowledge.json} & 建筑问答条目 \\
+    \texttt{frontend/app.js} & 游戏逻辑、计分、viewer / 地图联动 \\
+    \texttt{backend/resource\_manager.py} & 后台下载队列与占用统计 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{全景与宫图}
+\textbf{全景侧}：由 Pannellum 迁移至 \textbf{krpano}，直接加载与官方一致的 \texttt{.tiles} 六面体结构（\texttt{f/b/l/r/u/d}，多级 \texttt{l1/l2/l3}），按需拉取本地 jpg，避免整场景一次性下载。
+\textbf{地图侧}：Leaflet 使用 \texttt{L.CRS.Simple}，瓦片路径 \texttt{leaflet/tiles/\{z\}/tile\_\{x\}\_\{y\}.png}，世界尺度约 $8192\times 8192$ 像素（\texttt{MAP\_MAX\_ZOOM=5}）。用户点击地图时，将容器坐标反投影为「用户坐标系」下的 $(x,y)$，与锚点真值比较。
+\section{坐标标定与计分}
+\subsection{问题背景}
+官方 \texttt{coordinates.json} 为每个 scene 提供 \texttt{x\_axis/y\_axis}，官网前端将其直接作为 Leaflet 平面坐标打点，\textbf{未做全局统一仿射}。不同 \texttt{panorama\_id} 下数据的局部尺度与偏移存在差异；本地使用一张固定 offline 宫图时，若照搬 JSON 坐标，真值与视觉位置会出现系统偏差。
+\subsection{锚点采集与变换模型}
+我们在宫图上人工标定真值，分两类来源：
+\begin{itemize}[nosep]
+  \item \textbf{manual9}：早期 9 点粗标；
+  \item \textbf{captured}：调试模式（\texttt{?debug=anchors}）下逐 scene 点击落库，精度更高。
+\end{itemize}
+合并后共 \textbf{34} 个锚点（captured 优先去重）。标定脚本 \texttt{calibrate\_map\_transform.py} / \texttt{analyze\_per\_pano\_anchors.py} 拟合：
+\begin{itemize}[nosep]
+  \item \textbf{全局 6 参 affine}：作为 fallback；
+  \item \textbf{per-panorama affine}：样本数 $n\ge 3$ 的分区变换，显著降低前三殿、御花园等区域的像素误差。
+\end{itemize}
+拟合结果（user 坐标空间）：全局 RMSE 约 \textbf{39.5}；启用本区 affine 后加权 RMSE 约 \textbf{27.0}。前端 \texttt{getSceneTruthCoord} 优先级为：\texttt{click\_pixel\_xy} 仿射真值 $>$ 锚点 \texttt{user\_x/y} $>$ catalog 回退坐标。
+\begin{figure}[htbp]
+  \centering
+  \figplaceholder[width=0.88\linewidth]{T1_verify_anchors.png}
+  \caption{锚点验证模式（\texttt{?verify=anchors}）：在宫图上叠加各 scene 真值，用于质检标定结果。}
+  \label{fig:verify}
+\end{figure}
+\subsection{计分规则}
+猜测点 $(g_x,g_y)$ 与真值 $(t_x,t_y)$ 的欧氏距离为 $d$。本题得分采用分段线性插值，满分 5000 分：
+\begin{table}[htbp]
+  \centering
+  \caption{距离—得分对照（节选）}
+  \label{tab:score}
+  \begin{tabular}{@{}cc@{}}
+    \toprule
+    距离 $d$ & 得分 \\
+    \midrule
+    $\le 5$ & 5000 \\
+    $\le 10$ & 4500 \\
+    $\le 20$ & 4000 \\
+    $\le 40$ & 3000 \\
+    $\le 80$ & 1500 \\
+    $\le 160$ & 750 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+超出 160 后按末段斜率继续衰减至 0。提交后显示猜测—真值连线；游戏模式隐藏原始误差距离，以「本题得分 / 累计分 / 平均分」呈现。季节与建筑问答各额外 +500 分。
+\section{功能实现}
+\subsection{游戏流程}
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \figplaceholder[width=\linewidth]{02_gameplay_before_submit.png}
+    \caption{提交前：全景观察 + 宫图选点}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \figplaceholder[width=\linewidth]{03_score_after_submit.png}
+    \caption{提交后：连线反馈与计分}
+  \end{subfigure}
+  \caption{核心玩法两阶段界面}
+  \label{fig:gameplay}
+\end{figure}
+单局流程：加载场景 $\rightarrow$ 全景漫游 $\rightarrow$ 宫图选点 $\rightarrow$ 提交 $\rightarrow$（随机）季节小问 $\rightarrow$ 建筑小问 $\rightarrow$ 下一题。随机出题\textbf{仅从未本地已下载瓦片的场景}中抽取，避免进入未缓存资源导致的加载失败；当未玩本地场景数低于阈值时，后台按锚点优先、非夏季优先等策略预下载。
+\subsection{满分特效（5000 分）}
+当 $d\le 5$ 时，除 550\,ms 分数滚动外，叠加方案 B 反馈：计分板金边脉冲、地图金色涟漪、顶部横幅「满分定位 · 5000」、轻量纸屑动画，以及 Web Audio 三音 chime。报告模式默认静音，录屏可加 \texttt{\&sound=1}。
+\begin{figure}[htbp]
+  \centering
+  \figplaceholder[width=0.88\linewidth]{04_perfect_5000_fx.png}
+  \caption{5000 分满分特效（峰值帧）。建议在 \texttt{?report=1\&verify=anchors\&figure=3} 保和殿场景拍摄。}
+  \label{fig:perfect}
+\end{figure}
+\subsection{知识问答}
+\texttt{scene\_knowledge.json} 为 34 个场景提供问答题与解析文案；提交定位后展示与当前建筑相关的选择题。图~\ref{fig:quiz} 为季节与建筑问答示例。
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \figplaceholder[width=\linewidth]{05_season_quiz.png}
+    \caption{季节小问}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\linewidth}
+    \centering
+    \figplaceholder[width=\linewidth]{06_knowledge_quiz.png}
+    \caption{建筑小问（神武门）}
+  \end{subfigure}
+  \caption{扩展问答模块}
+  \label{fig:quiz}
+\end{figure}
+\subsection{本地资源管理}
+全库 34 景全景瓦片合计约 667\,MB，宫图及静态资源约 52\,MB（设置面板将宫图并入「其它」展示，因无宫图无法游戏）。用户可通过右下角「设置」面板查看占用、设置磁盘预算、触发预下载或按 MB / 场景数清理缓存；清理时保护已锚点场景。
+\begin{figure}[htbp]
+  \centering
+  \figplaceholder[width=0.55\linewidth]{T2_settings_storage.png}
+  \caption{资源占用与下载设置（普通模式）}
+  \label{fig:settings}
+\end{figure}
+\subsection{报告演示模式}
+面向 LaTeX 截图与答辩，URL 参数 \texttt{?report=1} 会：隐藏「设置」面板、关闭后台预下载、更换产品向副标题、显示六个代表场景快捷按钮。推荐配图场景：太和殿、中和殿、保和殿、箭亭、神武门、天一门（\texttt{figure=1..6}）。
+\section{部署与运行}
+本地启动：
+\begin{lstlisting}
+start_server.bat    # Windows
+./start_server.sh   # macOS / Linux
+\end{lstlisting}
+浏览器访问 \url{http://127.0.0.1:8000/}。报告演示：\url{http://127.0.0.1:8000/?report=1}。
+交付方案：（A）教师机 Python + 本地瓦片子集；（B）Electron 单文件打包（约 180--220\,MB，计划中）；（C）PDF 报告 + 演示录屏。
+\section{测试与体验}
+\subsection{功能测试}
+\begin{itemize}[nosep]
+  \item 34 个 catalog 场景在本地瓦片齐全时可正常加载全景与宫图；
+  \item 提交后真值标记、连线、计分与问答流程完整；
+  \item 随机 / 下一题不会进入未下载场景；
+  \item 锚点验证模式下真值点与 captured 记录一致。
+\end{itemize}
+\subsection{标定精度}
+在 per-pano affine 启用后，多数 captured 锚点在本区模型下残差 $<10$ user 单位；少数 manual9 早期粗标（如太极殿、古华轩）残差仍 $>50$，已列入复核清单。对游戏而言，$d\le 5$ 的满分区间在视觉上要求点击非常接近真值，符合「精准定位」难度设计。
+\subsection{性能}
+早期版本在每次页面加载时扫描 \texttt{data/raw} 统计占用，导致约 5\,s 延迟；现改为打开设置面板时按需刷新并缓存 120\,s，首屏加载恢复至秒级。
+\section{总结与展望}
+\subsection{工作总结}
+本项目完成了从官方数字全景到可玩定位游戏的迁移：集成 krpano 与 Leaflet，建立 34 点锚点与分 panorama 仿射标定 pipeline，实现计分、问答、资源管理与报告演示模式，版本 \textbf{1.0} 可用于课程答辩与交付。
+\subsection{局限}
+\begin{itemize}[nosep]
+  \item 官方坐标与本地宫图仍存在分区系统误差，依赖持续锚点采集；
+  \item 前端为 Vanilla JS 而非需求文档初拟的 React，便于快速迭代但组件化不足；
+  \item 34 景全量瓦片体积大，教师机交付需精选子集或懒下载；
+  \item 季节题在题库夏季占比较高，季节问答出现概率已做平衡但仍偏随机。
+\end{itemize}
+\subsection{后续工作}
+\begin{enumerate}[nosep]
+  \item Electron 打包与默认 10 景离线包；
+  \item 复核 manual9 离群锚点，扩大 captured 覆盖；
+  \item 倒计时、排行榜、多难度模式（猜区域 / 猜建筑）；
+  \item 若迁移专业课：React 重构、TypeScript 类型与单元测试。
+\end{enumerate}
+\section*{参考文献}
+\addcontentsline{toc}{section}{参考文献}
+\begin{enumerate}[label={[\arabic*]},leftmargin=2em]
+  \item 故宫博物院数字文物库与全景漫游站点 \url{https://pano.dpm.org.cn/}
+  \item krpano 文档 \url{https://krpano.com/docu/}
+  \item Leaflet 官方文档 \url{https://leafletjs.com/}
+  \item GeoGuessr 游戏机制参考 \url{https://www.geoguessr.com/}
+\end{enumerate}
+\appendix
+\section{配图文件清单}
+\begin{table}[htbp]
+  \centering
+  \small
+  \begin{tabular}{@{}ll@{}}
+    \toprule
+    文件名 & 用途 \\
+    \midrule
+    \texttt{01\_home\_overview.png} & 图~\ref{fig:home} \\
+    \texttt{02\_gameplay\_before\_submit.png} & 图~\ref{fig:gameplay}a \\
+    \texttt{03\_score\_after\_submit.png} & 图~\ref{fig:gameplay}b \\
+    \texttt{04\_perfect\_5000\_fx.png} & 图~\ref{fig:perfect} \\
+    \texttt{05\_season\_quiz.png} & 图~\ref{fig:quiz}a \\
+    \texttt{06\_knowledge\_quiz.png} & 图~\ref{fig:quiz}b \\
+    \texttt{07\_next\_round.png} & 完整流程（可选正文引用） \\
+    \texttt{T1\_verify\_anchors.png} & 图~\ref{fig:verify} \\
+    \texttt{T2\_settings\_storage.png} & 图~\ref{fig:settings} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+详细拍摄 URL 与检查项见 \texttt{docs/report\_assets\_and\_perfect\_score.md}。
+\end{document}

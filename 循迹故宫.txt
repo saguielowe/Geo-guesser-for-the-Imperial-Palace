@@ -1,0 +1,132 @@
+下面是根据**本会话记忆**整理的改动清单，供你对照 GitHub 旧版本快速补回。  
+**前提：** GitHub 上是「此对话前」的状态；对话里大量改动**可能从未 push**；`data/` 下 JPG/瓦片需重下；你保留的 `main.pdf` 对应 `docs/report/main.tex` 的最终稿思路。
+
+---
+
+## 一、核心代码（在 GitHub 基础上改过的）
+
+### `backend/server.py`
+- **场景清单**：优先 `scene_catalog.demo_anchors.local.json`（不再优先 demo10）。
+- **资源 API**：`/api/resources/status`（含 `?usage=1`）、`/prefetch`、`/prune`、`/refresh` 等。
+- **宫图路径**：静态资源指向 `data/raw/leaflet/tiles`（不是 `assets/map`）。
+- **知识库**：提供 `/api/knowledge`，读取 `data/processed/scene_knowledge.json`。
+- **配置/健康检查**：`/api/config`、`/api/health` 等返回本地可玩数、catalog 模式等（供前端顶栏统计）。
+
+### `backend/resource_manager.py`（新文件或本会话大幅新增）
+- 后台下载队列（复用 `scripts/phase0_bulk_tiles.py` 逻辑）。
+- **prefetch 策略**：优先已锚点/有 pixel 的场景，其次非夏季等。
+- **prune 策略**：按 MB 或场景数清理，**保护已锚点场景**。
+- **占用统计**：`pano_mb` + `other_mb`（**宫图并入 other**，不再单独 `map_mb`）；120s 缓存；避免首屏全盘扫描 `data/raw`。
+
+### `frontend/app.js`（改动最多，约 2200+ 行量级）
+- **游戏模式**：`GAME_MODE`；隐藏 leak 信息；计分板 2×2（本题/题号/累计/平均分 `xxxx/5000`）；游戏模式**隐藏误差距离**。
+- **真值优先级** `getSceneTruthCoord`：`click_pixel_xy` → `user_x/y` → catalog 回退。
+- **计分** `scoreByDistance`：分段 knots（≤5 → 5000 等）；`animateScoreDisplay`。
+- **满分特效（方案 B）**：`score >= 5000` → 金边、地图涟漪、横幅、纸屑、Web Audio chime；报告模式默认静音，`?sound=1` 开声。
+- **回合流程**：提交 → 季节小问（概率）→ 建筑小问 → 下一题；`local-only` 随机；低题量 prefetch。
+- **报告模式** `?report=1`：隐藏 ⚙、停 prefetch、改副标题/版本文案、六景按钮 `REPORT_FIGURE_SCENES`。
+- **设置面板**：懒下载、磁盘预算、占用显示（全景 / 其它 / 合计）、清理。
+- **常量**：`PERFECT_SCORE=5000`，`REPORT_FIGURE_SCENES`（太和殿、中和殿、保和殿、箭亭、神武门、天一门）。
+
+### `frontend/index.html`
+- 布局：左全景+计分，右宫图+问答。
+- 计分区 `id="score-board"`，版本 **1.0**。
+- 设置面板（⚙）、季节/建筑问答区、`next-round-btn`。
+- `report-figure-nav`（报告六按钮，默认 hidden）。
+
+### `frontend/styles.css`
+- `.score-board`、compact 计分样式。
+- 设置面板 `.settings-fab` / `.settings-panel`。
+- 报告模式 `.is-report-mode`。
+- 满分特效：`.is-perfect`、`.perfect-toast`、`.perfect-confetti`、`.perfect-map-ring` 等。
+
+---
+
+## 二、数据 / 脚本（GitHub 上可能没有或需 regenerated）
+
+| 文件 | 本会话作用 |
+|------|------------|
+| `data/processed/scene_catalog.demo_anchors.local.json` | 34 景锚点题库（运行时 catalog 优先用它） |
+| `data/processed/scene_knowledge.json` | 34 道建筑问答题（由脚本生成） |
+| `data/processed/map_anchor_points.captured.json` | debug 模式采点 |
+| `data/processed/map_anchor_points.manual9.json` | 早期 9 点 |
+| `data/raw/map_transform.json` | 全局 + per-panorama affine |
+| `data/raw/leaflet/tiles/**` | 宫图 JPG/PNG 瓦片（**已全部丢失，需重下**） |
+| `data/raw/panoramas/**` | 全景 JPG 瓦片（**已全部丢失，需重下**） |
+
+| 脚本 | 本会话提及/新增 |
+|------|----------------|
+| `scripts/build_scene_knowledge.py` | 生成 `scene_knowledge.json` |
+| `scripts/pick_demo10.py` | demo10 列表（**运行时已不再用 demo10 catalog**，打包参考用） |
+| `scripts/analyze_per_pano_anchors.py` | 锚点 RMSE 报告 |
+| `scripts/calibrate_map_transform.py` | 仿射标定 |
+| `scripts/expand_anchor_panoramas.py` 等 | 锚点/下载辅助 |
+
+**恢复顺序建议：** clone GitHub → 跑 `phase0_bulk_tiles.py` / `fetch_leaflet_map_resources.py` 等把 **data/raw** 拉回 → 再生成 processed JSON（若 GitHub 未含 processed）。
+
+---
+
+## 三、文档（你已有 PDF；源文件在 GitHub 上可能不全）
+
+| 文件 | 内容 |
+|------|------|
+| `docs/report/main.tex` | LaTeX 报告终稿（故宫学、工程规模表、坐标标定、详细计分、Electron 交付计划 §7；**无** 6.5 报告模式专节） |
+| `docs/report/README.md` | xelatex 编译说明 |
+| `docs/report/main.pdf` | **你已保留** |
+| `docs/delivery_and_report.md` | 交付、report URL、链到 report |
+| `docs/report_assets_and_perfect_score.md` | 截图清单 + 5000 分特效方案 B |
+| `docs/per_pano_fit_report.md` 等 | 锚点精度（会话前可能有，未大改） |
+
+若 GitHub 无 `docs/report/`，以你本地 **PDF + 下面第四节文字** 为准重写 `main.tex`，或从 Cursor 历史找 tex（若有）。
+
+---
+
+## 四、启动脚本
+
+| 文件 | 改动 |
+|------|------|
+| `start_server.bat` | 找 Python（含 Anaconda 路径）→ `backend\server.py` |
+| `start_server.sh` / `start_server.command` | 同上，跨平台 |
+
+---
+
+## 五、Electron 打包（**GitHub 备份里很可能没有**；D: 上已随项目消失）
+
+| 路径 | 内容 |
+|------|------|
+| `electron/main.js` | 启 Python 后端 + BrowserWindow → `127.0.0.1:8000`，支持 `--report` |
+| `electron/preload.js` | 占位 |
+| `electron/package.json` | electron-builder；`extraResources` 打包 `../backend`、`../frontend`、`../data` |
+| `electron/README.md` | 平台说明：Win/Mac/Linux 各打各的包；**仍依赖本机 Python 3** |
+| `pack_electron.bat` | `cd electron` → `npm install` → `npm run pack:win` |
+| `.gitignore` | 增加 `electron/node_modules/`、`electron/dist/` |
+
+另在 **`C:\Users\23329\peb-palace\`** 曾复制过一份 `electron/`（含完整 `node_modules`），与 D: 项目无关；**不要**把它当项目恢复源。
+
+---
+
+## 六、`.gitignore` 改动
+- 原有：`data/`、`logs/`、`*.jpg` 等  
+- 本会话追加：`electron/node_modules/`、`electron/dist/`
+
+---
+
+## 七、快速恢复优先级（对照 GitHub clone 后）
+
+1. **必做**：`backend/server.py`、`resource_manager.py`、`frontend/app.js`、`index.html`、`styles.css`  
+2. **数据**：重下 `data/raw`（panoramas + leaflet/tiles）；补 `scene_knowledge.json`、catalog、anchor、map_transform  
+3. **演示**：`start_server.bat` → `http://127.0.0.1:8000/?report=1`  
+4. **报告**：你已有 PDF；可选补 `docs/report/main.tex`  
+5. **可选**：Electron 目录 + `pack_electron.bat`（需重装 npm 依赖，**不要**再跑之前有问题的 `rmdir` 清理）
+
+---
+
+## 八、本会话**未**改或仅轻微提及
+
+- `需求.md`、`RULES.md`：基本未动  
+- `.tmp_official/`：逆向参考，非运行必需  
+- 未成功完成 Electron 打包产物（无可靠 `dist/*.exe`）
+
+---
+
+如果你 clone 后把 **GitHub 上某个文件的旧版** 贴出来或说「和 GitHub diff 缺什么」，我可以按文件逐段说「该补哪几块逻辑」（仍只给文字，不跑命令、不改盘）。
