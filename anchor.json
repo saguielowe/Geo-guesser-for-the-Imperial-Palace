@@ -1,0 +1,405 @@
+{
+  "items": [
+    {
+      "scene_id": 1,
+      "scene_name": "scene_1_summer",
+      "scene_title": "太和殿正殿",
+      "panorama_id": 20,
+      "x_axis": "16.45424538694282",
+      "y_axis": "0.703125",
+      "user_x": 8.596763317736388,
+      "user_y": 2.4541519047531635,
+      "captured_at": "2026-05-10T18:09:54",
+      "click_pixel_xy": [
+        4121.634940714129,
+        3722.1015625
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 29,
+      "scene_name": "scene_29_summer",
+      "scene_title": "保和殿左侧门楼",
+      "panorama_id": 20,
+      "x_axis": "45.39844997630411",
+      "y_axis": "4.174804687500001",
+      "user_x": 33.50486761478309,
+      "user_y": 5.6256582062690015,
+      "captured_at": "2026-05-10T18:04:25",
+      "click_pixel_xy": [
+        4199.247954932618,
+        2922.203125
+         ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 1663,
+      "scene_name": "scene_1663_summer",
+      "scene_title": "三大殿右侧",
+      "panorama_id": 20,
+      "x_axis": "26.470573022375085",
+      "y_axis": "-15.490722656250002",
+      "user_x": 14.399904813369929,
+      "user_y": -17.218309009354158,
+      "captured_at": "2026-05-10T18:05:26",
+      "click_pixel_xy": [
+        3691.3322876081565,
+        3510.203125
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 1676,
+      "scene_name": "scene_1676_summer",
+      "scene_title": "中右门西值房",
+      "panorama_id": 20,
+      "x_axis": "12.897489183755892",
+      "y_axis": "-21.11572265625",
+      "user_x": 5.143712676530895,
+      "user_y": -20.997174513085984,
+      "captured_at": "2026-05-10T18:06:30",
+      "click_pixel_xy": [
+        3605.368550658638,
+        3804.203125
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 1682,
+      "scene_name": "scene_1682_summer",
+      "scene_title": "中和殿前",
+      "panorama_id": 20,
+      "x_axis": "29.36302703778376",
+      "y_axis": "0.703125",
+      "user_x": 19.154902963675564,
+      "user_y": 1.940628972033252,
+      "captured_at": "2026-05-10T18:07:11",
+      "click_pixel_xy": [
+        4113.721155259611,
+        3380.713279922342
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 1811,
+      "scene_name": "scene_1811_summer",
+      "scene_title": "后右门",
+      "panorama_id": 20,
+      "x_axis": "42.97250158602597",
+      "y_axis": "-22.873535156250004",
+      "user_x": 29.29351015979062,
+      "user_y": -23.08077643264581,
+      "captured_at": "2026-05-10T18:09:09",
+      "click_pixel_xy": [
+        3567.2985545379415,
+        3022.203125
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3195,
+      "scene_name": "scene_3195_summer",
+      "scene_title": "左翼门东侧",
+      "panorama_id": 58,
+      "x_axis": "7.100892668623654",
+      "y_axis": "33.48632812500001",
+      "user_x": 3.5051730246392157,
+      "user_y": 36.75650631703614,
+      "captured_at": "2026-05-10T23:09:50",
+      "click_pixel_xy": [
+        4873.545569539802,
+        3929.3392176426273
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3196,
+      "scene_name": "scene_3196_summer",
+      "scene_title": "箭亭",
+      "panorama_id": 58,
+      "x_axis": "16.3833911236084",
+      "y_axis": "37.66113281250001",
+      "user_x": 10.586884620900431,
+      "user_y": 40.455455092430455,
+      "captured_at": "2026-05-10T22:59:22",
+      "click_pixel_xy": [
+        4957.060300173698,
+        3705.416858554643
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3204,
+      "scene_name": "scene_3204_summer",
+      "scene_title": "景运门东侧",
+      "panorama_id": 58,
+      "x_axis": "51.57706953722567",
+      "y_axis": "31.267089843750004",
+      "user_x": 40.346986576684515,
+      "user_y": 33.63909239582053,
+      "captured_at": "2026-05-10T23:10:55",
+      "click_pixel_xy": [
+        4816.812870863874,
+        2736.4328109562957
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3206,
+      "scene_name": "scene_3206_summer",
+      "scene_title": "箭亭北侧",
+      "panorama_id": 58,
+      "x_axis": "40.74725696280421",
+      "y_axis": "36.95800781250001",
+      "user_x": 30.299959719969344,
+      "user_y": 39.194257847630546,
+      "captured_at": "2026-05-10T22:58:41",
+      "click_pixel_xy": [
+        4935.641545079394,
+        3067.633353763448
+      ],
+ "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3298,
+      "scene_name": "scene_3298_summer",
+      "scene_title": "坤宁门外",
+      "panorama_id": 63,
+      "x_axis": "76.68484630658422",
+      "y_axis": "0.32958984375000006",
+      "user_x": 83.79974443702282,
+      "user_y": 0.7733551980109166,
+      "captured_at": "2026-05-10T23:11:49",
+      "click_pixel_xy": [
+        4108.694394569403,
+        1292.9517102211225
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+        "scene_id": 3307,
+      "scene_name": "scene_3307_summer",
+      "scene_title": "天一门",
+      "panorama_id": 63,
+      "x_axis": "78.24243607612068",
+      "y_axis": "6.1962890625",
+      "user_x": 89.43682835372948,
+      "user_y": 7.107314433449218,
+      "captured_at": "2026-05-10T18:13:05",
+      "click_pixel_xy": [
+        4249.632823472169,
+        1118.9488624437904
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3329,
+      "scene_name": "scene_3329_summer",
+      "scene_title": "钦安殿外西南侧",
+      "panorama_id": 63,
+       "x_axis": "78.80624627112448",
+      "y_axis": "-5.031738281250001",
+      "user_x": 90.31674984670333,
+      "user_y": -5.084123049934395,
+      "captured_at": "2026-05-10T18:12:05",
+      "click_pixel_xy": [
+        3982.0989635764577,
+        1075.2983249539034
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3369,
+      "scene_name": "scene_3369_summer",
+      "scene_title": "坤宁门外西值房西侧",
+      "panorama_id": 63,
+      "x_axis": "76.85081714852865",
+      "y_axis": "-8.723144531250002",
+      "user_x": 83.7739937585984,
+      "user_y": -8.482290763786928,
+      "captured_at": "2026-05-10T23:12:29",
+      "click_pixel_xy": [
+        3905.363490698106,
+        1282.203125
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3396,
+      "scene_name": "scene_3396_summer",
+      "scene_title": "位育斋东树池",
+      "panorama_id": 63,
+      "x_axis": "80.33119700747295",
+      "y_axis": "-9.206542968750002",
+      "user_x": 96.2652209073156,
+      "user_y": -9.559767001587113,
+      "captured_at": "2026-05-10T23:13:16",
+      "click_pixel_xy": [
+        3885.6775658127563,
+        877.7222078944133
+        ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3406,
+      "scene_name": "scene_3406_summer",
+      "scene_title": "玉翠亭内",
+      "panorama_id": 63,
+      "x_axis": "80.63274029782397",
+      "y_axis": "-14.128417968750002",
+      "user_x": 97.23625254431795,
+      "user_y": -14.581203120571127,
+      "captured_at": "2026-05-10T23:03:42",
+      "click_pixel_xy": [
+        3775.6792153687866,
+        840.1015625000005
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+        "scene_id": 3602,
+      "scene_name": "scene_3602_summer",
+      "scene_title": "禊赏亭内",
+      "panorama_id": 71,
+      "x_axis": "73.35305494105975",
+      "y_axis": "57.70019531250001",
+      "user_x": 76.80904867743006,
+      "user_y": 59.614279207179294,
+      "captured_at": "2026-05-10T23:14:01",
+      "click_pixel_xy": [
+        5399.048542221562,
+        1592.1796856262317
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3625,
+      "scene_name": "scene_3625_summer",
+      "scene_title": "遂初堂西配殿",
+      "panorama_id": 71,
+      "x_axis": "75.71563324165896",
+      "y_axis": "59.34814453125001",
+      "user_x": 83.03535617521833,
+      "user_y": 61.81539511266059,
+      "captured_at": "2026-05-10T23:14:37",
+      "click_pixel_xy": [
+        5449.3869559761315,
+        1393.9901009153104
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3629,
+      "scene_name": "scene_3629_summer",
+      "scene_title": "遂初堂东北侧",
+      "panorama_id": 71,
+      "x_axis": "75.76974676475697",
+      "y_axis": "62.33642578125001",
+      "user_x": 83.24480002936485,
+      "user_y": 64.62129365181015,
+       "captured_at": "2026-05-10T23:15:05",
+      "click_pixel_xy": [
+        5511.092108320442,
+        1390.7410913298845
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3703,
+      "scene_name": "scene_3703_spring",
+      "scene_title": "神武门",
+      "panorama_id": 63,
+      "x_axis": "81.23831322414186",
+      "y_axis": "1.0766601562500002",
+      "user_x": 100.8773756833537,
+      "user_y": 1.0951751468040258,
+      "captured_at": "2026-05-10T22:57:45",
+      "click_pixel_xy": [
+        4121.210005228626,
+        742.203125
+        ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3768,
+      "scene_name": "scene_3768_summer",
+      "scene_title": "浮碧亭",
+      "panorama_id": 63,
+      "x_axis": "79.25768197738242",
+      "y_axis": "15.578613281250002",
+      "user_x": 93.00846076528828,
+      "user_y": 16.217579005618965,
+      "captured_at": "2026-05-10T23:02:29",
+      "click_pixel_xy": [
+        4450.900854315176,
+        1015.0783210141576
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+         "scene_id": 3821,
+      "scene_name": "scene_3821_winter",
+      "scene_title": "怀远堂",
+      "panorama_id": 71,
+      "x_axis": "79.98953235712875",
+      "y_axis": "65.36865234375001",
+      "user_x": 98.3150308862461,
+      "user_y": 67.72889505271728,
+      "captured_at": "2026-05-10T23:15:40",
+      "click_pixel_xy": [
+        5584.163999254494,
+        908.2631678942812
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3822,
+      "scene_name": "scene_3822_winter",
+      "scene_title": "⽵⾹馆",
+      "panorama_id": 71,
+       "x_axis": "80.01242320181375",
+      "y_axis": "57.85400390625",
+      "user_x": 97.3185953530959,
+      "user_y": 59.48020613771818,
+      "captured_at": "2026-05-10T23:01:13",
+      "click_pixel_xy": [
+        5402.643795645061,
+        930.1015625
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3838,
+      "scene_name": "scene_3838_winter",
+      "scene_title": "碧螺亭",
+      "panorama_id": 71,
+      "x_axis": "78.15255126151743",
+      "y_axis": "61.17187500000001",
+      "user_x": 90.60974494938588,
+      "user_y": 63.42400758749742,
+       "captured_at": "2026-05-10T23:16:11",
+      "click_pixel_xy": [
+        5487.139499156006,
+        1151.552233882826
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    },
+    {
+      "scene_id": 3848,
+      "scene_name": "scene_3848_winter",
+      "scene_title": "撷芳亭",
+      "panorama_id": 71,
+      "x_axis": "71.95177764301071",
+      "y_axis": "64.09423828125001",
+      "user_x": 74.11686733295406,
+      "user_y": 66.77508834076698,
+      "captured_at": "2026-05-10T23:16:51",
+      "click_pixel_xy": [
+        5555.494530549494,
+        1688.0240288003602
+      ],
+      "click_pixel_source": "backfilled_from_map_transform.before_per_pano.bak.json"
+    }
+  ],
+  "count": 25
+}

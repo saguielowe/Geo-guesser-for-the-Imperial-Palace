@@ -1,22 +1,3 @@
-/* 寻迹故宫 · 1.0 — 游戏核心 */
-
-// ---- 常量 ----
-const PERFECT_SCORE = 5000;
-const GAME_MODE = true; // true=游戏模式（隐藏 leak），false=调试模式
-const REPORT_FIGURE_SCENES = [
-  "太和殿", "中和殿", "保和殿",
-  "箭亭", "神武门", "天一门",
-];
-const SEASON_QUIZ_PROB = 0.4; // 每题出现季节小问的概率
-
-// ---- URL 参数 ----
-const urlParams = new URLSearchParams(window.location.search);
-const IS_REPORT = urlParams.get("report") === "1";
-const IS_SOUND = urlParams.get("sound") === "1";
-const IS_VERIFY = urlParams.get("verify") === "anchors";
-const FIGURE_IDX = parseInt(urlParams.get("figure") || "0", 10);
-
-// ---- 全局状态 ----
 const state = {
   scenes: [],
   currentScene: null,
@@ -31,58 +12,63 @@ const state = {
   lastGuessLatLng: null,
   mapTransform: null,
   perPanoTransforms: null,
+  anchorData: {},
   mapFocusBounds: null,
   scoreValue: 0,
   scoreAnimId: null,
   usedTilesPollTimer: null,
   krpanoViewerId: "krpano_viewer",
-
   // 游戏状态
   roundNumber: 0,
   totalScore: 0,
   roundScores: [],
   roundSubmitted: false,
-  quizAnswered: { season: false, knowledge: false },
-  quizBonus: { season: 0, knowledge: 0 },
+  quizBonus: 0,
   knowledgeData: [],
   currentKnowledge: null,
-  catalogSource: "",
-  playableCount: 0,
+  isReport: false,
+  isSound: false,
 };
 
-// ---- DOM 引用 ----
 const dom = {
-  // 顶栏
-  headerPlayable: document.getElementById("header-playable"),
-  reportFigureNav: document.getElementById("report-figure-nav"),
+  sceneCount: document.getElementById("scene-count"),
+  inventoryCount: document.getElementById("inventory-count"),
+  sceneTitle: document.getElementById("scene-title"),
+  sceneName: document.getElementById("scene-name"),
+  panoramaName: document.getElementById("panorama-name"),
+  sceneGroup: document.getElementById("scene-group"),
+  sceneSeasons: document.getElementById("scene-seasons"),
+  coordX: document.getElementById("coord-x"),
+  coordY: document.getElementById("coord-y"),
+  guessX: document.getElementById("guess-x"),
+  guessY: document.getElementById("guess-y"),
+  guessDistance: document.getElementById("guess-distance"),
+  guessScore: document.getElementById("guess-score"),
 
-  // 全景
-  viewerFrame: document.getElementById("viewer-frame"),
-  viewerCanvas: document.getElementById("krpano_viewer"),
+  debugLevel: document.getElementById("debug-level"),
+  debugTileList: document.getElementById("debug-tile-list"),
+  sceneList: document.getElementById("scene-list"),
   viewerPlaceholder: document.querySelector(".viewer-placeholder"),
-
-  // 计分
+  viewerFrame: document.getElementById("viewer-frame"),
+  viewerCanvas: document.getElementById("pannellum-viewer"),
+  randomBtn: document.getElementById("random-btn"),
+  viewerUsedCount: document.getElementById("viewer-used-count"),
+  viewerUsedList: document.getElementById("viewer-used-list"),
+  viewerMissingCount: document.getElementById("viewer-missing-count"),
+  viewerMissingList: document.getElementById("viewer-missing-list"),
+  mapBox: document.querySelector(".map-box"),
+  mapPlaceholder: document.getElementById("map-placeholder"),
+  miniMap: document.getElementById("mini-map"),
+  mapRecenterBtn: document.getElementById("map-recenter-btn"),
+  submitGuessBtn: document.getElementById("submit-guess-btn"),
+  // 1.0 新增
+  versionBadge: document.getElementById("version-badge"),
   scoreBoard: document.getElementById("score-board"),
   scoreCurrent: document.getElementById("score-current"),
   scoreRound: document.getElementById("score-round"),
   scoreTotal: document.getElementById("score-total"),
   scoreAvg: document.getElementById("score-avg"),
-
-  // 控制
-  submitGuessBtn: document.getElementById("submit-guess-btn"),
   nextRoundBtn: document.getElementById("next-round-btn"),
-
-  // 地图
-  mapBox: document.getElementById("map-box"),
-  miniMap: document.getElementById("mini-map"),
-  mapPlaceholder: document.getElementById("map-placeholder"),
-  mapRecenterBtn: document.getElementById("map-recenter-btn"),
-
-  // 场景信息
-  sceneTitle: document.getElementById("scene-title"),
-  sceneGroup: document.getElementById("scene-group"),
-
-  // 问答
   quizZone: document.getElementById("quiz-zone"),
   seasonQuiz: document.getElementById("season-quiz"),
   seasonQuestion: document.getElementById("season-question"),
@@ -91,117 +77,313 @@ const dom = {
   knowledgeQuestion: document.getElementById("knowledge-question"),
   knowledgeOptions: document.getElementById("knowledge-options"),
   knowledgeFact: document.getElementById("knowledge-fact"),
-
-  // 特效
   perfectToast: document.getElementById("perfect-toast"),
   confettiContainer: document.getElementById("confetti-container"),
-  perfectMapRing: document.getElementById("perfect-map-ring"),
-
-  // 设置
   settingsFab: document.getElementById("settings-fab"),
   settingsPanel: document.getElementById("settings-panel"),
-  statPanoMb: document.getElementById("stat-pano-mb"),
-  statOtherMb: document.getElementById("stat-other-mb"),
-  statTotalMb: document.getElementById("stat-total-mb"),
-  statPlayable: document.getElementById("stat-playable"),
-  budgetMb: document.getElementById("budget-mb"),
-  btnPrefetch: document.getElementById("btn-prefetch"),
-  btnPruneByMb: document.getElementById("btn-prune-by-mb"),
-  btnPruneByCount: document.getElementById("btn-prune-by-count"),
-  btnRefreshUsage: document.getElementById("btn-refresh-usage"),
+  reportFigureNav: document.getElementById("report-figure-nav"),
 };
 
-// ---- 地图常量 ----
+function normalizeTilePath(urlLike) {
+  try {
+    return new URL(String(urlLike), window.location.origin).pathname;
+  } catch {
+    return String(urlLike || "");
+  }
+}
+
+function trackViewerTile(pathname) {
+  const path = normalizeTilePath(pathname);
+  if (!path.startsWith("/assets/viewer/panos/")) {
+    return;
+  }
+  if (!window.__viewerUsedTileSet) {
+    window.__viewerUsedTileSet = new Set();
+  }
+  if (!window.__viewerUsedTileOrder) {
+    window.__viewerUsedTileOrder = [];
+  }
+  if (!window.__viewerUsedTileSet.has(path)) {
+    window.__viewerUsedTileSet.add(path);
+    window.__viewerUsedTileOrder.push(path);
+  }
+}
+
+function installViewerUsageProbe() {
+  if (window.__viewerUsageProbeInstalled) {
+    return;
+  }
+  window.__viewerUsageProbeInstalled = true;
+  window.__viewerUsedTileSet = window.__viewerUsedTileSet || new Set();
+  window.__viewerUsedTileOrder = window.__viewerUsedTileOrder || [];
+
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  if (descriptor && descriptor.get && descriptor.set) {
+    Object.defineProperty(HTMLImageElement.prototype, "src", {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      get() {
+        return descriptor.get.call(this);
+      },
+      set(value) {
+        trackViewerTile(value);
+        descriptor.set.call(this, value);
+      },
+    });
+  }
+
+  const originalSetAttribute = HTMLImageElement.prototype.setAttribute;
+  HTMLImageElement.prototype.setAttribute = function patchedSetAttribute(name, value) {
+    if (String(name).toLowerCase() === "src") {
+      trackViewerTile(value);
+    }
+    return originalSetAttribute.call(this, name, value);
+  };
+}
+
+function getUsedTilesForScene(scene) {
+  if (!scene || !window.__viewerUsedTileOrder) {
+    return [];
+  }
+  const oldPrefix = `/assets/viewer/panos/${scene.panorama_id}/${scene.pano_stub}/`;
+  const krpanoPrefix = `/panoramas/${scene.panorama_id}/krpano/panos/${scene.pano_stub}.tiles/`;
+  return window.__viewerUsedTileOrder.filter((path) => {
+    if (!path.startsWith(oldPrefix) && !path.startsWith(krpanoPrefix)) {
+      return false;
+    }
+    // Focus usage stats on highest-detail tiles only.
+    return /\/l3\//.test(path) && /\.jpg$/.test(path);
+  });
+}
+
+/** 将 API 里的 /assets/viewer/panos/... 转为 krpano 实际请求的 /panoramas/.../krpano/panos/*.tiles/... */
+function viewerAliasToKrpanoTileUrl(legacyPath) {
+  const m = legacyPath.match(
+    /^\/assets\/viewer\/panos\/(\d+)\/([^/]+)\/(l\d)\/([fblrud])\/(\d+)\/(\d+)\.jpg$/,
+  );
+  if (!m) {
+    return null;
+  }
+  const [, pid, stub, levelTag, face, rowStr, colStr] = m;
+  const row = Number.parseInt(rowStr, 10);
+  const col = Number.parseInt(colStr, 10);
+  const vr = String(row + 1).padStart(2, "0");
+  const vc = String(col + 1).padStart(2, "0");
+  return `/panoramas/${pid}/krpano/panos/${stub}.tiles/${face}/${levelTag}/${vr}/${levelTag}_${face}_${vr}_${vc}.jpg`;
+}
+
+function getExpectedTilesForScene(scene) {
+  // Keep expected/missing debug view only for synthetic debug scene.
+  if (!scene || scene.scene_name !== "scene_debug_tiles") {
+    return [];
+  }
+  if (!scene || !scene.viewer_debug_tile_urls) {
+    return [];
+  }
+  const all = [];
+  for (const face of ["f", "b", "l", "r", "u", "d"]) {
+    for (const legacy of scene.viewer_debug_tile_urls[face] || []) {
+      const k = viewerAliasToKrpanoTileUrl(legacy);
+      if (k) {
+        all.push(k);
+      }
+    }
+  }
+  return all;
+}
+
+function getMissingTilesForScene(scene) {
+  const expected = getExpectedTilesForScene(scene);
+  const used = new Set(getUsedTilesForScene(scene));
+  return expected.filter((path) => !used.has(path));
+}
+
+function renderViewerUsedTiles(scene) {
+  if (!dom.viewerUsedList || !dom.viewerUsedCount) {
+    return;
+  }
+  const used = getUsedTilesForScene(scene);
+  dom.viewerUsedCount.textContent = String(used.length);
+  dom.viewerUsedList.innerHTML = "";
+  for (const path of used.slice(0, 160)) {
+    const link = document.createElement("a");
+    link.href = path;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = path;
+    dom.viewerUsedList.appendChild(link);
+  }
+
+  if (dom.viewerMissingList && dom.viewerMissingCount) {
+    const missing = getMissingTilesForScene(scene);
+    const expected = getExpectedTilesForScene(scene);
+    if (expected.length === 0) {
+      dom.viewerMissingCount.textContent = "-";
+      dom.viewerMissingList.innerHTML = "";
+    } else {
+      dom.viewerMissingCount.textContent = String(missing.length);
+      dom.viewerMissingList.innerHTML = "";
+      for (const path of missing.slice(0, 220)) {
+        const link = document.createElement("a");
+        link.href = path;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.textContent = path;
+        dom.viewerMissingList.appendChild(link);
+      }
+    }
+  }
+}
+
+function formatValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : value.toFixed(6);
+  }
+  return String(value);
+}
+
+function renderSceneList() {
+  dom.sceneList.innerHTML = "";
+  state.scenes.slice(0, 12).forEach((scene) => {
+    const button = document.createElement("button");
+    button.className = "scene-chip";
+    button.type = "button";
+    button.textContent = scene.scene_title || scene.scene_name;
+    button.title = scene.scene_name;
+    button.addEventListener("click", () => loadScene(scene.scene_name));
+    dom.sceneList.appendChild(button);
+  });
+}
+
+function renderDebugTiles(scene) {
+  if (!dom.debugTileList) {
+    return;
+  }
+  dom.debugTileList.innerHTML = "";
+  const level = scene.viewer_source_level || "l3";
+  if (dom.debugLevel) {
+    dom.debugLevel.textContent = `${level} | ${scene.viewer_source_tile_rows || 0}x${scene.viewer_source_tile_cols || 0}`;
+  }
+
+  const debugUrls = scene.viewer_debug_tile_urls || {};
+  for (const face of ["f", "b", "l", "r", "u", "d"]) {
+    const urls = debugUrls[face] || [];
+    const faceCard = document.createElement("section");
+    faceCard.className = "debug-face-card";
+
+    const heading = document.createElement("div");
+    heading.className = "debug-face-head";
+    heading.innerHTML = `<span>${face}</span><strong>${urls.length}</strong>`;
+    faceCard.appendChild(heading);
+
+    const grid = document.createElement("div");
+    grid.className = "debug-url-grid";
+    urls.forEach((url) => {
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = url;
+      grid.appendChild(link);
+    });
+    faceCard.appendChild(grid);
+    dom.debugTileList.appendChild(faceCard);
+  }
+}
+
+function clearViewer() {
+  if (state.usedTilesPollTimer) {
+    window.clearInterval(state.usedTilesPollTimer);
+    state.usedTilesPollTimer = null;
+  }
+  if (window.removepano) {
+    try {
+      window.removepano(state.krpanoViewerId);
+    } catch (error) {
+      console.warn("remove krpano failed", error);
+    }
+  }
+  state.viewer = null;
+  dom.viewerCanvas.innerHTML = "";
+}
+
 const MAP_MAX_ZOOM = 5;
 const MAP_MIN_ZOOM = 1;
 const MAP_TILE_SIZE = 256;
 const MAP_WORLD_SIZE = MAP_TILE_SIZE * 2 ** MAP_MAX_ZOOM;
 
-// ---- 工具函数 ----
-function formatValue(value) {
-  if (value === null || value === undefined || value === "") return "-";
-  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(4);
-  return String(value);
-}
-
-async function requestJson(url, options = {}) {
-  const resp = await fetch(url, {
-    headers: { Accept: "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  if (!resp.ok) throw new Error(`请求失败: ${resp.status}`);
-  return resp.json();
-}
-
-// ---- 坐标系统 ----
 function normalizeMapTransform(payload) {
   const affine = payload?.affine || payload?.transform || null;
-  if (!affine) return null;
-  const vals = [affine.a, affine.b, affine.c, affine.d, affine.e, affine.f].map(Number);
-  if (vals.some(v => !Number.isFinite(v))) return null;
-  const [a, b, c, d, e, f] = vals;
+  if (!affine) {
+    return null;
+  }
+  const values = [affine.a, affine.b, affine.c, affine.d, affine.e, affine.f].map((v) => Number(v));
+  if (values.some((v) => !Number.isFinite(v))) {
+    return null;
+  }
+  const [a, b, c, d, e, f] = values;
   const det = a * e - b * d;
-  if (Math.abs(det) < 1e-9) return null;
+  if (Math.abs(det) < 1e-9) {
+    return null;
+  }
   return { a, b, c, d, e, f, det };
 }
 
-function applyCoordToMapPixel(coordX, coordY, transform) {
-  const t = transform || state.mapTransform;
-  if (!t) return null;
-  const x = Number(coordX), y = Number(coordY);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { px: t.a * x + t.b * y + t.c, py: t.d * x + t.e * y + t.f };
+function applyCoordToMapPixel(coordX, coordY) {
+  const x = Number(coordX);
+  const y = Number(coordY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+  const t = state.mapTransform;
+  if (!t) {
+    return null;
+  }
+  return {
+    px: t.a * x + t.b * y + t.c,
+    py: t.d * x + t.e * y + t.f,
+  };
 }
 
-function applyMapPixelToCoord(pixelX, pixelY, transform) {
-  const t = transform || state.mapTransform;
-  if (!t) return null;
-  const px = Number(pixelX), py = Number(pixelY);
-  if (!Number.isFinite(px) || !Number.isFinite(py)) return null;
-  const dx = px - t.c, dy = py - t.f;
-  return { x: (t.e * dx - t.b * dy) / t.det, y: (-t.d * dx + t.a * dy) / t.det };
+function applyMapPixelToCoord(pixelX, pixelY) {
+  const px = Number(pixelX);
+  const py = Number(pixelY);
+  if (!Number.isFinite(px) || !Number.isFinite(py)) {
+    return null;
+  }
+  const t = state.mapTransform;
+  if (!t) {
+    return null;
+  }
+  const dx = px - t.c;
+  const dy = py - t.f;
+  return {
+    x: (t.e * dx - t.b * dy) / t.det,
+    y: (-t.d * dx + t.a * dy) / t.det,
+  };
 }
 
-// 真值优先级: click_pixel_xy 仿射 → user_x/y → catalog 回退
-function getSceneTruthCoord(scene) {
-  if (!scene) return null;
-
-  // 1) click_pixel_xy: 通过 per-pano affine 映射
-  const cpx = scene.click_pixel_xy;
-  if (cpx && Array.isArray(cpx) && cpx.length === 2) {
-    const perPano = state.perPanoTransforms?.[scene.scene_name];
-    if (perPano) {
-      const pixel = applyCoordToMapPixel(cpx[0], cpx[1], perPano);
-      if (pixel) {
-        const coord = applyMapPixelToCoord(pixel.px, pixel.py);
-        if (coord) return coord;
-      }
-    }
-    // fallback with global transform
-    const pixel = applyCoordToMapPixel(cpx[0], cpx[1], state.mapTransform);
-    if (pixel) {
-      const coord = applyMapPixelToCoord(pixel.px, pixel.py);
-      if (coord) return coord;
-    }
-  }
-
-  // 2) user_x / user_y 锚点
-  const ux = Number(scene.user_x), uy = Number(scene.user_y);
-  if (Number.isFinite(ux) && Number.isFinite(uy)) {
-    return { x: ux, y: uy };
-  }
-
-  // 3) catalog 坐标回退
-  const cx = Number(scene.coordinate_x), cy = Number(scene.coordinate_y);
-  if (Number.isFinite(cx) && Number.isFinite(cy)) {
-    return { x: cx, y: cy };
-  }
-  return null;
+function updateGuessDisplay(guess) {
+  dom.guessX.textContent = guess ? formatValue(guess.x) : "-";
+  dom.guessY.textContent = guess ? formatValue(guess.y) : "-";
 }
 
-// ---- 计分 ----
+function resetRoundResultDisplay() {
+  if (dom.guessDistance) {
+    dom.guessDistance.textContent = "-";
+  }
+  if (dom.guessScore) {
+    dom.guessScore.textContent = "-";
+  }
+}
+
 function scoreByDistance(distance) {
-  if (!Number.isFinite(distance)) return 0;
+  if (!Number.isFinite(distance)) {
+    return 0;
+  }
   const knots = [
     { d: 5, s: 5000 },
     { d: 10, s: 4500 },
@@ -210,23 +392,33 @@ function scoreByDistance(distance) {
     { d: 80, s: 1500 },
     { d: 160, s: 750 },
   ];
-  if (distance <= knots[0].d) return 5000;
-  for (let i = 0; i < knots.length - 1; i++) {
-    const a = knots[i], b = knots[i + 1];
+  if (distance <= knots[0].d) {
+    return 5000;
+  }
+  for (let i = 0; i < knots.length - 1; i += 1) {
+    const a = knots[i];
+    const b = knots[i + 1];
     if (distance <= b.d) {
       const t = (distance - a.d) / (b.d - a.d);
       return Math.round(a.s + t * (b.s - a.s));
     }
   }
-  const tailSlope = (knots[5].s - knots[4].s) / (knots[5].d - knots[4].d);
+  // Beyond 160 keep declining with last segment slope until 0.
+  const tailSlope = (knots[5].s - knots[4].s) / (knots[5].d - knots[4].d); // -9.375
   const tail = knots[5].s + (distance - knots[5].d) * tailSlope;
   return Math.max(0, Math.round(tail));
 }
 
 function animateScoreDisplay(targetScore) {
-  if (state.scoreAnimId) { window.cancelAnimationFrame(state.scoreAnimId); state.scoreAnimId = null; }
+  if (!dom.guessScore) {
+    return;
+  }
+  if (state.scoreAnimId) {
+    window.cancelAnimationFrame(state.scoreAnimId);
+    state.scoreAnimId = null;
+  }
   const start = Number(state.scoreValue) || 0;
-  const end = Math.max(0, Math.min(5500, Number(targetScore) || 0));
+  const end = Math.max(0, Math.min(5000, Number(targetScore) || 0));
   const durationMs = 550;
   const startAt = performance.now();
 
@@ -234,72 +426,93 @@ function animateScoreDisplay(targetScore) {
     const t = Math.min(1, (now - startAt) / durationMs);
     const eased = 1 - (1 - t) ** 3;
     const current = Math.round(start + (end - start) * eased);
-    dom.scoreCurrent.textContent = `${Math.min(current, PERFECT_SCORE)} / ${PERFECT_SCORE}`;
+    dom.guessScore.textContent = `${current} / 5000`;
     if (t < 1) {
       state.scoreAnimId = window.requestAnimationFrame(tick);
     } else {
       state.scoreAnimId = null;
-      state.scoreValue = Math.min(end, PERFECT_SCORE);
+      state.scoreValue = end;
     }
   }
+
   state.scoreAnimId = window.requestAnimationFrame(tick);
 }
 
+/** 真值坐标优先级: user_x/y -> click_pixel_xy(仿射映射) -> x_axis/y_axis(fallback) */
+function getSceneTruthCoord(scene) {
+  if (!scene) return null;
+  // 1) 锚点 user_x/user_y
+  const ux = Number(scene.user_x), uy = Number(scene.user_y);
+  if (Number.isFinite(ux) && Number.isFinite(uy)) return { x: ux, y: uy };
+  // 2) click_pixel_xy 通过 per-pano affine 转 user coord
+  const cpx = scene.click_pixel_xy;
+  if (cpx && Array.isArray(cpx) && cpx.length === 2) {
+    const perPano = state.perPanoTransforms?.[String(scene.panorama_id)];
+    const t = perPano || state.mapTransform;
+    if (t) {
+      const pixel = { px: Number(cpx[0]), py: Number(cpx[1]) };
+      if (Number.isFinite(pixel.px) && Number.isFinite(pixel.py)) {
+        const coord = applyMapPixelToCoord(pixel.px, pixel.py);
+        if (coord) return coord;
+      }
+    }
+  }
+  // 3) catalog x_axis/y_axis fallback
+  const cx = Number(scene.coordinate_x), cy = Number(scene.coordinate_y);
+  if (Number.isFinite(cx) && Number.isFinite(cy)) return { x: cx, y: cy };
+  return null;
+}
+
 function updateScoreboardUI() {
+  if (!dom.scoreRound) return;
   dom.scoreRound.textContent = String(state.roundNumber);
   dom.scoreTotal.textContent = String(state.totalScore);
-  const avg = state.roundScores.length > 0
-    ? Math.round(state.totalScore / state.roundScores.length)
-    : 0;
-  dom.scoreAvg.textContent = `${avg} / ${PERFECT_SCORE}`;
+  if (state.roundScores.length > 0) {
+    dom.scoreAvg.textContent = Math.round(state.totalScore / state.roundScores.length) + " / 5000";
+  }
+}
+
+function resetRoundState() {
+  state.roundSubmitted = false;
+  state.quizBonus = 0;
+  state.currentKnowledge = null;
+  state.scoreValue = 0;
+  state.lastGuessCoord = null;
+  state.lastGuessLatLng = null;
+  if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
+  if (state.guessMarker) { state.guessMarker.remove(); state.guessMarker = null; }
+  dom.submitGuessBtn.disabled = true;
+  if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "none";
+  if (dom.quizZone) dom.quizZone.style.display = "none";
+  if (dom.seasonQuiz) dom.seasonQuiz.style.display = "none";
+  if (dom.knowledgeQuiz) dom.knowledgeQuiz.style.display = "none";
+  if (dom.scoreCurrent) dom.scoreCurrent.textContent = "0 / 5000";
 }
 
 // ---- 满分特效（方案 B） ----
 function triggerPerfectEffects() {
-  // 计分板金边
-  dom.scoreBoard?.classList.add("is-perfect");
-  setTimeout(() => dom.scoreBoard?.classList.remove("is-perfect"), 3200);
-
-  // 横幅
+  if (dom.scoreBoard) {
+    dom.scoreBoard.classList.add("is-perfect");
+    setTimeout(function () { dom.scoreBoard.classList.remove("is-perfect"); }, 3200);
+  }
   if (dom.perfectToast) {
     dom.perfectToast.style.display = "block";
     dom.perfectToast.style.animation = "none";
     void dom.perfectToast.offsetWidth;
     dom.perfectToast.style.animation = "";
-    setTimeout(() => { dom.perfectToast.style.display = "none"; }, 3200);
+    setTimeout(function () { dom.perfectToast.style.display = "none"; }, 3200);
   }
-
-  // 纸屑
   spawnConfetti();
-
-  // 地图涟漪
-  if (dom.perfectMapRing && state.map && state.guessMarker) {
-    const mapEl = dom.mapBox || dom.miniMap?.parentElement;
-    if (mapEl) {
-      const pos = state.map.latLngToContainerPoint(state.guessMarker.getLatLng());
-      dom.perfectMapRing.style.display = "block";
-      dom.perfectMapRing.style.left = pos.x + "px";
-      dom.perfectMapRing.style.top = pos.y + "px";
-      dom.perfectMapRing.style.animation = "none";
-      void dom.perfectMapRing.offsetWidth;
-      dom.perfectMapRing.style.animation = "mapRing 1.8s ease-out forwards";
-      setTimeout(() => { dom.perfectMapRing.style.display = "none"; }, 2000);
-    }
-  }
-
-  // Web Audio chime（报告模式默认静音）
-  if (IS_SOUND || !IS_REPORT) {
-    playChime();
-  }
+  if (state.isSound || !state.isReport) playChime();
 }
 
 function spawnConfetti() {
   if (!dom.confettiContainer) return;
   dom.confettiContainer.style.display = "block";
   dom.confettiContainer.innerHTML = "";
-  const colors = ["#f59e0b", "#fbbf24", "#fcd34d", "#22c55e", "#3b82f6", "#ef4444", "#a855f7"];
-  for (let i = 0; i < 50; i++) {
-    const piece = document.createElement("div");
+  var colors = ["#f59e0b", "#fbbf24", "#fcd34d", "#22c55e", "#3b82f6", "#ef4444", "#a855f7"];
+  for (var i = 0; i < 50; i++) {
+    var piece = document.createElement("div");
     piece.className = "confetti-piece";
     piece.style.left = Math.random() * 100 + "%";
     piece.style.top = -(Math.random() * 40 + 10) + "px";
@@ -310,19 +523,16 @@ function spawnConfetti() {
     piece.style.animationDuration = (Math.random() * 1.5 + 2) + "s";
     dom.confettiContainer.appendChild(piece);
   }
-  setTimeout(() => {
-    dom.confettiContainer.style.display = "none";
-    dom.confettiContainer.innerHTML = "";
-  }, 3500);
+  setTimeout(function () { dom.confettiContainer.style.display = "none"; dom.confettiContainer.innerHTML = ""; }, 3500);
 }
 
 function playChime() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
-    notes.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    var notes = [523.25, 659.25, 783.99];
+    notes.forEach(function (freq, i) {
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.value = freq;
       gain.gain.setValueAtTime(0.18, ctx.currentTime + i * 0.12);
@@ -331,84 +541,62 @@ function playChime() {
       osc.start(ctx.currentTime + i * 0.12);
       osc.stop(ctx.currentTime + i * 0.12 + 0.5);
     });
-  } catch (e) { /* 静默 */ }
+  } catch (e) { /* silent */ }
 }
 
-// ---- 全景 ----
-function clearViewer() {
-  if (state.usedTilesPollTimer) { window.clearInterval(state.usedTilesPollTimer); state.usedTilesPollTimer = null; }
-  if (window.removepano) {
-    try { window.removepano(state.krpanoViewerId); } catch (e) { /* */ }
-  }
-  state.viewer = null;
-  if (dom.viewerCanvas) dom.viewerCanvas.innerHTML = "";
-}
-
-function renderViewer(scene) {
-  if (!window.embedpano) {
-    if (dom.viewerCanvas) dom.viewerCanvas.innerHTML = "<div style='padding:24px;color:#fecaca;text-align:center'>krpano 未加载</div>";
+function submitGuess() {
+  if (!state.currentScene || !state.lastGuessCoord || !state.map || state.roundSubmitted) {
     return;
   }
-  clearViewer();
-  if (dom.viewerFrame) {
-    dom.viewerFrame.classList.remove("is-ready");
-    dom.viewerFrame.classList.add("is-loading");
+  var truth = getSceneTruthCoord(state.currentScene);
+  if (!truth || !state.lastGuessLatLng) return;
+
+  var gx = Number(state.lastGuessCoord.x), gy = Number(state.lastGuessCoord.y);
+  var tx = Number(truth.x), ty = Number(truth.y);
+  if (![tx, ty, gx, gy].every(function (v) { return Number.isFinite(v); })) return;
+
+  state.roundSubmitted = true;
+  dom.submitGuessBtn.disabled = true;
+
+  var distance = Math.hypot(gx - tx, gy - ty);
+  var score = scoreByDistance(distance);
+
+  // 绘制连线（用 truthMarker 的最新位置）
+  if (state.truthMarker && state.guessMarker) {
+    if (state.guessLine) state.guessLine.remove();
+    state.guessLine = window.L.polyline([state.guessMarker.getLatLng(), state.truthMarker.getLatLng()], {
+      color: "#f59e0b", weight: 3, opacity: 0.9, dashArray: "7 6",
+    }).addTo(state.map);
   }
 
-  const isDebug = scene.scene_name === "scene_debug_tiles";
-  const tourXml = isDebug ? "/assets/debug_krpano_tour.xml" : "/assets/project_tour.xml";
-  const startScene = isDebug ? "scene_debug_tiles" : scene.scene_name;
+  if (dom.guessDistance) dom.guessDistance.textContent = distance.toFixed(2);
+  if (dom.guessScore) animateScoreDisplay(score);
 
-  try {
-    window.embedpano({
-      target: state.krpanoViewerId,
-      id: state.krpanoViewerId,
-      xml: tourXml,
-      html5: "only",
-      mobilescale: 1.0,
-      passQueryParameters: false,
-      vars: { startscene: startScene },
-      onready(krpano) {
-        state.viewer = krpano;
-        krpano.call(`loadscene(${startScene}, null, MERGE, BLEND(0));`);
-        if (dom.viewerFrame) {
-          dom.viewerFrame.classList.remove("is-loading");
-          dom.viewerFrame.classList.add("is-ready");
-        }
-        if (dom.viewerPlaceholder) dom.viewerPlaceholder.hidden = true;
-      },
-      onerror(msg) {
-        if (dom.viewerFrame) {
-          dom.viewerFrame.classList.remove("is-loading", "is-ready");
-        }
-        if (dom.viewerPlaceholder) dom.viewerPlaceholder.hidden = false;
-        if (dom.viewerCanvas) dom.viewerCanvas.innerHTML = `<div style="padding:24px;color:#fecaca;text-align:center">${msg}</div>`;
-      },
-    });
-  } catch (e) {
-    if (dom.viewerFrame) dom.viewerFrame.classList.remove("is-loading", "is-ready");
-    if (dom.viewerPlaceholder) dom.viewerPlaceholder.hidden = false;
-    if (dom.viewerCanvas) dom.viewerCanvas.innerHTML = `<div style="padding:24px;color:#fecaca;text-align:center">${e.message}</div>`;
-  }
-}
+  // 满分检测
+  if (score >= 5000) setTimeout(function () { triggerPerfectEffects(); }, 600);
 
-// ---- 地图 ----
-function createDotIcon(className) {
-  return window.L.divIcon({
-    className: "",
-    html: `<div class="${className}"></div>`,
-    iconSize: [12, 12],
-    iconAnchor: [6, 6],
-  });
+  // 记录成绩
+  state.roundScores.push(score);
+  state.totalScore += score;
+  state.roundNumber++;
+  updateScoreboardUI();
+
+  // 显示下一题按钮
+  if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "block";
 }
 
 function getSceneFocusBounds() {
-  if (!state.map || !state.mapTransform || !state.scenes.length) return null;
+  if (!state.map || !state.mapTransform || !state.scenes.length) {
+    return null;
+  }
   const points = state.scenes
-    .map(s => applyCoordToMapPixel(s.coordinate_x, s.coordinate_y))
-    .filter(p => p && Number.isFinite(p.px) && Number.isFinite(p.py));
-  if (!points.length) return null;
-  const xs = points.map(p => p.px), ys = points.map(p => p.py);
+    .map((scene) => applyCoordToMapPixel(scene.coordinate_x, scene.coordinate_y))
+    .filter((point) => point && Number.isFinite(point.px) && Number.isFinite(point.py));
+  if (!points.length) {
+    return null;
+  }
+  const xs = points.map((p) => p.px);
+  const ys = points.map((p) => p.py);
   const pad = 180;
   const minX = Math.max(0, Math.min(...xs) - pad);
   const maxX = Math.min(MAP_WORLD_SIZE, Math.max(...xs) + pad);
@@ -420,12 +608,25 @@ function getSceneFocusBounds() {
 }
 
 function recenterMiniMap() {
-  if (!state.map || !state.mapFocusBounds) return;
+  if (!state.map || !state.mapFocusBounds) {
+    return;
+  }
   state.map.fitBounds(state.mapFocusBounds, { animate: false, padding: [8, 8] });
 }
 
+function createDotIcon(className) {
+  return window.L.divIcon({
+    className: "",
+    html: `<div class="${className}"></div>`,
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  });
+}
+
 function installMiniMap() {
-  if (!dom.miniMap || !window.L || state.map) return;
+  if (!dom.miniMap || !window.L || state.map) {
+    return;
+  }
   state.map = window.L.map(dom.miniMap, {
     crs: window.L.CRS.Simple,
     center: [0, 0],
@@ -454,216 +655,160 @@ function installMiniMap() {
   state.map.setMaxBounds(mapBounds.pad(0.25));
   state.map.invalidateSize();
   state.mapFocusBounds = getSceneFocusBounds();
-  if (state.mapFocusBounds) recenterMiniMap();
-
+  if (state.mapFocusBounds) {
+    recenterMiniMap();
+  }
   state.map.on("click", (event) => {
-    if (state.roundSubmitted) return; // 已提交则不可改点
     const point = state.map.project(event.latlng, MAP_MAX_ZOOM);
     const guess = applyMapPixelToCoord(point.x, point.y);
     state.lastGuessCoord = guess;
     state.lastGuessLatLng = event.latlng;
-    if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
-    if (state.guessMarker) state.guessMarker.remove();
+    updateGuessDisplay(guess);
+    resetRoundResultDisplay();
+    if (state.guessLine) {
+      state.guessLine.remove();
+      state.guessLine = null;
+    }
+    if (state.guessMarker) {
+      state.guessMarker.remove();
+    }
     state.guessMarker = window.L.marker(event.latlng, {
       icon: createDotIcon("guess-dot"),
       title: "猜测点",
     }).addTo(state.map);
-    dom.submitGuessBtn.disabled = false;
   });
-
   dom.mapBox?.classList.add("is-ready");
-  if (dom.mapPlaceholder) dom.mapPlaceholder.hidden = true;
+  if (dom.mapPlaceholder) {
+    dom.mapPlaceholder.hidden = true;
+  }
 }
 
 function renderMapForScene(scene) {
-  if (!state.map) return;
-  const truth = getSceneTruthCoord(scene);
-  if (!truth) return;
-  const pixel = applyCoordToMapPixel(truth.x, truth.y);
-  if (!pixel) return;
+  if (!state.map) {
+    return;
+  }
+  var truth = getSceneTruthCoord(scene);
+  var pixel = truth ? applyCoordToMapPixel(truth.x, truth.y) : null;
+  if (!pixel) {
+    // fallback to catalog coords
+    pixel = applyCoordToMapPixel(scene?.coordinate_x, scene?.coordinate_y);
+  }
+  if (!pixel) {
+    return;
+  }
   const latlng = state.map.unproject([pixel.px, pixel.py], MAP_MAX_ZOOM);
-  if (state.truthMarker) state.truthMarker.remove();
+  if (state.truthMarker) {
+    state.truthMarker.remove();
+  }
   state.truthMarker = window.L.marker(latlng, {
     icon: createDotIcon("truth-dot"),
     title: "场景真值点",
   }).addTo(state.map);
-  if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
-  if (state.guessMarker) { state.guessMarker.remove(); state.guessMarker = null; }
-}
-
-// ---- 回合流程 ----
-function submitGuess() {
-  if (!state.currentScene || !state.lastGuessCoord || !state.map || state.roundSubmitted) return;
-  const truth = getSceneTruthCoord(state.currentScene);
-  if (!truth) return;
-
-  const gx = Number(state.lastGuessCoord.x), gy = Number(state.lastGuessCoord.y);
-  const tx = Number(truth.x), ty = Number(truth.y);
-  if (![gx, gy, tx, ty].every(v => Number.isFinite(v))) return;
-
-  state.roundSubmitted = true;
-  dom.submitGuessBtn.disabled = true;
-
-  const distance = Math.hypot(gx - tx, gy - ty);
-  const baseScore = scoreByDistance(distance);
-
-  // 绘制连线
-  if (state.guessMarker && state.truthMarker) {
-    state.guessLine = window.L.polyline(
-      [state.guessMarker.getLatLng(), state.truthMarker.getLatLng()],
-      { color: "#f59e0b", weight: 3, opacity: 0.9, dashArray: "7 6" }
-    ).addTo(state.map);
-  }
-
-  // 动画计分
-  animateScoreDisplay(baseScore);
-  state.scoreValue = baseScore;
-
-  // 满分检测
-  if (baseScore >= PERFECT_SCORE) {
-    setTimeout(() => triggerPerfectEffects(), 600);
-  }
-
-  // 进入问答阶段
-  setTimeout(() => startQuizPhase(baseScore), 800);
-}
-
-function startQuizPhase(baseScore) {
-  // 季节小问
-  if (Math.random() < SEASON_QUIZ_PROB && state.currentScene?.seasons?.length > 1) {
-    showSeasonQuiz(baseScore);
-  } else {
-    showKnowledgeQuiz(baseScore);
+  if (state.guessLine) {
+    state.guessLine.remove();
+    state.guessLine = null;
   }
 }
 
-function showSeasonQuiz(baseScore) {
-  const seasons = state.currentScene.seasons || [];
-  const correct = state.currentScene.season_hint || seasons[0];
-  dom.seasonQuiz.style.display = "block";
-  dom.quizZone.style.display = "flex";
-  dom.seasonQuestion.textContent = `这个场景是哪个季节拍摄的？`;
-  dom.seasonOptions.innerHTML = "";
-  const options = [...new Set(seasons)].sort(() => Math.random() - 0.5);
-  options.forEach(opt => {
-    const btn = document.createElement("button");
-    btn.textContent = opt;
-    btn.addEventListener("click", () => {
-      const isCorrect = opt === correct;
-      btn.classList.add(isCorrect ? "is-correct" : "is-wrong");
-      dom.seasonOptions.querySelectorAll("button").forEach(b => b.disabled = true);
-      state.quizAnswered.season = true;
-      if (isCorrect) state.quizBonus.season = 500;
-      setTimeout(() => {
-        dom.seasonQuiz.style.display = "none";
-        showKnowledgeQuiz(baseScore);
-      }, 1000);
-    });
-    dom.seasonOptions.appendChild(btn);
-  });
-}
-
-function showKnowledgeQuiz(baseScore) {
-  const kn = state.currentKnowledge;
-  if (!kn || !kn.question) {
-    finishRound(baseScore);
+function renderViewer(scene) {
+  if (!window.embedpano) {
+    dom.viewerCanvas.innerHTML = "<div class='viewer-error'>krpano 未加载，请检查运行时文件。</div>";
     return;
   }
-  dom.knowledgeQuiz.style.display = "block";
-  dom.quizZone.style.display = "flex";
-  dom.knowledgeQuestion.textContent = kn.question;
-  dom.knowledgeOptions.innerHTML = "";
-  dom.knowledgeFact.style.display = "none";
 
-  const options = [...(kn.options || [])];
-  if (!options.includes(kn.answer)) options.push(kn.answer);
-  options.sort(() => Math.random() - 0.5);
+  clearViewer();
+  dom.viewerFrame.classList.remove("is-ready");
+  dom.viewerFrame.classList.add("is-loading");
 
-  options.forEach(opt => {
-    const btn = document.createElement("button");
-    btn.textContent = opt;
-    btn.addEventListener("click", () => {
-      const isCorrect = opt === kn.answer;
-      btn.classList.add(isCorrect ? "is-correct" : "is-wrong");
-      dom.knowledgeOptions.querySelectorAll("button").forEach(b => b.disabled = true);
-      state.quizAnswered.knowledge = true;
-      if (isCorrect) state.quizBonus.knowledge = 500;
-      if (kn.fact) {
-        dom.knowledgeFact.textContent = `💡 ${kn.fact}`;
-        dom.knowledgeFact.style.display = "block";
-      }
-      setTimeout(() => {
-        dom.knowledgeQuiz.style.display = "none";
-        finishRound(baseScore);
-      }, 1800);
+  const isDebug = scene.scene_name === "scene_debug_tiles";
+  const tourXml = isDebug ? "/assets/debug_krpano_tour.xml" : "/assets/project_tour.xml";
+  const startScene = isDebug ? "scene_debug_tiles" : scene.scene_name;
+
+  try {
+    window.embedpano({
+      target: "pannellum-viewer",
+      id: state.krpanoViewerId,
+      xml: tourXml,
+      html5: "only",
+      mobilescale: 1.0,
+      passQueryParameters: false,
+      vars: {
+        startscene: startScene,
+      },
+      onready(krpano) {
+        state.viewer = krpano;
+        // BLEND(0) 减少场景切换时的短暂黑屏
+        krpano.call(`loadscene(${startScene}, null, MERGE, BLEND(0));`);
+        dom.viewerFrame.classList.remove("is-loading");
+        dom.viewerFrame.classList.add("is-ready");
+        if (dom.viewerPlaceholder) {
+          dom.viewerPlaceholder.hidden = true;
+        }
+      },
+      onerror(message) {
+        dom.viewerFrame.classList.remove("is-loading");
+        dom.viewerFrame.classList.remove("is-ready");
+        if (dom.viewerPlaceholder) {
+          dom.viewerPlaceholder.hidden = false;
+        }
+        dom.viewerCanvas.innerHTML = `<div class='viewer-error'>${message}</div>`;
+      },
     });
-    dom.knowledgeOptions.appendChild(btn);
+  } catch (error) {
+    dom.viewerFrame.classList.remove("is-loading");
+    dom.viewerFrame.classList.remove("is-ready");
+    if (dom.viewerPlaceholder) {
+      dom.viewerPlaceholder.hidden = false;
+    }
+    dom.viewerCanvas.innerHTML = `<div class='viewer-error'>${error.message}</div>`;
+  }
+}
+
+function renderScene(scene) {
+  state.currentScene = scene;
+  resetRoundState();
+  dom.sceneTitle.textContent = scene.scene_title || scene.scene_name || "未命名场景";
+  dom.sceneName.textContent = scene.scene_name || "-";
+  dom.panoramaName.textContent = scene.panorama_name || "-";
+  dom.sceneGroup.textContent = scene.scene_group_name || "-";
+  dom.sceneSeasons.textContent = Array.isArray(scene.seasons) ? scene.seasons.join(", ") : "-";
+  dom.coordX.textContent = formatValue(scene.coordinate_x);
+  dom.coordY.textContent = formatValue(scene.coordinate_y);
+  updateGuessDisplay(null);
+  state.scoreValue = 0;
+  resetRoundResultDisplay();
+  renderDebugTiles(scene);
+  renderViewer(scene);
+  renderMapForScene(scene);
+  renderViewerUsedTiles(scene);
+  window.setTimeout(() => renderViewerUsedTiles(scene), 1000);
+  window.setTimeout(() => renderViewerUsedTiles(scene), 2500);
+  if (state.usedTilesPollTimer) {
+    window.clearInterval(state.usedTilesPollTimer);
+  }
+  state.usedTilesPollTimer = window.setInterval(() => {
+    if (!state.currentScene || state.currentScene.scene_name !== scene.scene_name) {
+      return;
+    }
+    renderViewerUsedTiles(scene);
+  }, 1000);
+  document.querySelectorAll(".scene-chip").forEach((button) => {
+    button.classList.toggle("is-active", button.title === scene.scene_name);
   });
 }
 
-function finishRound(baseScore) {
-  const bonus = (state.quizBonus.season || 0) + (state.quizBonus.knowledge || 0);
-  const totalRound = Math.min(baseScore + bonus, PERFECT_SCORE);
-  if (bonus > 0 && state.scoreValue > 0) {
-    state.scoreValue = totalRound;
-    dom.scoreCurrent.textContent = `${totalRound} / ${PERFECT_SCORE}`;
+async function requestJson(url, options = {}) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  if (!response.ok) {
+    throw new Error(`请求失败: ${response.status}`);
   }
-
-  state.roundScores.push(totalRound);
-  state.totalScore += totalRound;
-  state.roundNumber++;
-  updateScoreboardUI();
-
-  dom.nextRoundBtn.style.display = "block";
-  dom.quizZone.style.display = "none";
-}
-
-function resetRound() {
-  state.roundSubmitted = false;
-  state.quizAnswered = { season: false, knowledge: false };
-  state.quizBonus = { season: 0, knowledge: 0 };
-  state.currentKnowledge = null;
-  state.scoreValue = 0;
-  state.lastGuessCoord = null;
-  state.lastGuessLatLng = null;
-
-  if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
-  if (state.guessMarker) { state.guessMarker.remove(); state.guessMarker = null; }
-
-  dom.submitGuessBtn.disabled = true;
-  dom.nextRoundBtn.style.display = "none";
-  dom.scoreCurrent.textContent = `0 / ${PERFECT_SCORE}`;
-  dom.seasonQuiz.style.display = "none";
-  dom.knowledgeQuiz.style.display = "none";
-  dom.quizZone.style.display = "none";
-}
-
-// ---- 场景加载 ----
-function renderScene(scene) {
-  state.currentScene = scene;
-  resetRound();
-
-  dom.sceneTitle.textContent = scene.scene_title || scene.scene_name || "未命名";
-  dom.sceneGroup.textContent = scene.scene_group_name || "";
-
-  // 查知识题
-  const knItems = state.knowledgeData.filter(
-    k => k.scene_name === scene.scene_name
-  );
-  state.currentKnowledge = knItems.length > 0
-    ? knItems[Math.floor(Math.random() * knItems.length)]
-    : null;
-
-  renderViewer(scene);
-  renderMapForScene(scene);
-
-  // 报告模式六景按钮高亮
-  if (IS_REPORT && dom.reportFigureNav) {
-    const idx = REPORT_FIGURE_SCENES.indexOf(scene.scene_title || scene.scene_name);
-    dom.reportFigureNav.querySelectorAll("button").forEach((b, i) => {
-      b.classList.toggle("is-active", i + 1 === idx || b.textContent === (scene.scene_title || scene.scene_name));
-    });
-  }
+  return response.json();
 }
 
 async function loadScene(sceneName) {
@@ -672,166 +817,81 @@ async function loadScene(sceneName) {
 }
 
 async function loadRandomScene() {
-  // 仅从本地已缓存中随机
-  const localNames = state.scenes
-    .filter(s => (s.local_tile_count || 0) > 0 && s.scene_name !== "scene_debug_tiles")
-    .map(s => s.scene_name);
-  if (localNames.length === 0) {
-    // fallback to any
-    const scene = await requestJson("/api/scenes/random");
-    renderScene(scene);
-    return;
-  }
-  const name = localNames[Math.floor(Math.random() * localNames.length)];
-  await loadScene(name);
+  const scene = await requestJson("/api/scenes/random");
+  renderScene(scene);
 }
 
-// ---- 设置面板 ----
-async function refreshUsageUI() {
-  try {
-    const data = await requestJson("/api/resources/status?usage=1");
-    if (data.usage) {
-      dom.statPanoMb.textContent = data.usage.pano_mb + " MB";
-      dom.statOtherMb.textContent = data.usage.other_mb + " MB";
-      dom.statTotalMb.textContent = data.usage.total_mb + " MB";
-    }
-    dom.statPlayable.textContent = String(data.playable_count || 0);
-    dom.headerPlayable.textContent = `可玩: ${data.playable_count || 0} | 题库: ${data.catalog_source || "--"}`;
-  } catch (e) {
-    console.warn("usage refresh failed", e);
-  }
-}
-
-function setupSettingsPanel() {
-  if (IS_REPORT) {
-    dom.settingsFab.style.display = "none";
-    return;
-  }
-
-  let panelOpen = false;
-  dom.settingsFab.addEventListener("click", () => {
-    panelOpen = !panelOpen;
-    dom.settingsPanel.style.display = panelOpen ? "block" : "none";
-    if (panelOpen) refreshUsageUI();
-  });
-
-  dom.btnRefreshUsage?.addEventListener("click", async () => {
-    try {
-      await requestJson("/api/resources/refresh");
-      await refreshUsageUI();
-    } catch (e) { console.warn(e); }
-  });
-
-  dom.btnPrefetch?.addEventListener("click", async () => {
-    try {
-      dom.btnPrefetch.disabled = true;
-      dom.btnPrefetch.textContent = "下载中…";
-      await requestJson("/api/resources/prefetch");
-      await refreshUsageUI();
-    } catch (e) { console.warn(e); }
-    finally {
-      dom.btnPrefetch.disabled = false;
-      dom.btnPrefetch.textContent = "预下载 5 景";
-    }
-  });
-
-  dom.btnPruneByMb?.addEventListener("click", async () => {
-    const mb = parseFloat(dom.budgetMb?.value || "500");
-    if (!confirm(`将清理至约 ${mb} MB，继续？`)) return;
-    try {
-      const result = await requestJson(`/api/resources/prune?max_mb=${mb}`);
-      alert(`已清理 ${result.pruned_count} 个场景，释放 ${result.freed_mb} MB`);
-      location.reload();
-    } catch (e) { alert("清理失败: " + e.message); }
-  });
-
-  dom.btnPruneByCount?.addEventListener("click", async () => {
-    if (!confirm("将仅保留 10 个场景，继续？")) return;
-    try {
-      const result = await requestJson("/api/resources/prune?max_scenes=10");
-      alert(`已清理 ${result.pruned_count} 个场景，释放 ${result.freed_mb} MB`);
-      location.reload();
-    } catch (e) { alert("清理失败: " + e.message); }
-  });
-}
-
-// ---- 报告模式六景导航 ----
-function setupReportNav() {
-  if (!IS_REPORT || !dom.reportFigureNav) return;
-  dom.reportFigureNav.style.display = "flex";
-  dom.reportFigureNav.querySelectorAll("button").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const title = btn.textContent.trim();
-      const scene = state.scenes.find(
-        s => (s.scene_title || s.scene_name) === title
-      );
-      if (scene) loadScene(scene.scene_name);
-    });
-  });
-}
-
-// ---- 初始化 ----
 async function init() {
-  document.body.classList.add("is-loading");
+  // URL 参数
+  var params = new URLSearchParams(window.location.search);
+  state.isReport = params.get("report") === "1";
+  state.isSound = params.get("sound") === "1";
+  var figureIdx = parseInt(params.get("figure") || "0", 10);
 
-  // 报告模式
-  if (IS_REPORT) {
+  if (state.isReport) {
     document.body.classList.add("is-report-mode");
     document.title = "寻迹故宫 · 报告演示";
+    if (dom.reportFigureNav) dom.reportFigureNav.style.display = "flex";
+    if (dom.settingsFab) dom.settingsFab.style.display = "none";
   }
+  if (dom.versionBadge) dom.versionBadge.textContent = "1.0";
 
-  // 加载配置
-  const config = await requestJson("/api/config");
-  const scenesResp = await requestJson("/api/scenes");
-  state.scenes = scenesResp.items || [];
-  state.bounds = config.bounds;
-  state.playableCount = config.playable_count || 0;
-  state.catalogSource = config.catalog_source || "unknown";
+  installViewerUsageProbe();
+  var config = await requestJson("/api/config");
+  var scenesResponse = await requestJson("/api/scenes");
 
-  // 加载地图变换
+  // 加载仿射变换（含 per-panorama）
   try {
-    const transformPayload = await requestJson("/assets/map_transform.json");
+    var transformPayload = await requestJson("/assets/map_transform.json");
     state.mapTransform = normalizeMapTransform(transformPayload);
-    // per-panorama transforms
-    if (transformPayload?.per_panorama) {
+    // per-pano transforms
+    if (transformPayload && transformPayload.per_panorama) {
       state.perPanoTransforms = {};
-      for (const [key, val] of Object.entries(transformPayload.per_panorama)) {
-        const t = normalizeMapTransform(val);
+      Object.keys(transformPayload.per_panorama).forEach(function (key) {
+        var t = normalizeMapTransform({ affine: transformPayload.per_panorama[key].affine });
         if (t) state.perPanoTransforms[key] = t;
-      }
+      });
     }
   } catch (e) {
     state.mapTransform = null;
   }
 
-  // 加载知识库
-  try {
-    const knResp = await requestJson("/api/knowledge");
-    state.knowledgeData = knResp.items || [];
-  } catch (e) {
-    state.knowledgeData = [];
+  state.scenes = scenesResponse.items || [];
+  state.bounds = config.bounds;
+  state.mapFocusBounds = null;
+  installMiniMap();
+  if (!state.map && dom.mapPlaceholder) {
+    dom.mapPlaceholder.innerHTML = "<p>地图运行时未加载（Leaflet 缺失）。</p><p>请先下载 /assets/vendor/leaflet.js。</p>";
+  } else if (!state.mapTransform && dom.mapPlaceholder) {
+    dom.mapPlaceholder.innerHTML = "<p>缺少 map_transform.json，地图仅显示底图。</p>";
+    dom.mapPlaceholder.hidden = false;
+    dom.mapBox?.classList.remove("is-ready");
   }
 
-  // 安装地图
-  installMiniMap();
+  dom.sceneCount.textContent = formatValue(scenesResponse.total);
+  dom.inventoryCount.textContent = formatValue(config.playable_count || config.inventory_count);
 
-  // 更新顶栏
-  dom.headerPlayable.textContent = `可玩: ${state.playableCount} | 题库: ${state.catalogSource}`;
-
-  // 设置面板
-  setupSettingsPanel();
+  renderSceneList();
 
   // 报告模式六景导航
-  setupReportNav();
-
-  // 加载初始场景
-  let startScene = config.default_scene_name;
-  if (IS_REPORT && FIGURE_IDX >= 1 && FIGURE_IDX <= 6) {
-    const title = REPORT_FIGURE_SCENES[FIGURE_IDX - 1];
-    const found = state.scenes.find(s => (s.scene_title || s.scene_name) === title);
-    if (found) startScene = found.scene_name;
+  var REPORT_SCENES = ["太和殿", "中和殿", "保和殿", "箭亭", "神武门", "天一门"];
+  if (state.isReport && dom.reportFigureNav) {
+    dom.reportFigureNav.querySelectorAll("button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var title = btn.textContent.trim();
+        var found = state.scenes.find(function (s) { return (s.scene_title || s.scene_name) === title; });
+        if (found) loadScene(found.scene_name);
+      });
+    });
   }
 
+  // 初始场景
+  var startScene = config.default_scene_name;
+  if (state.isReport && figureIdx >= 1 && figureIdx <= 6) {
+    var title = REPORT_SCENES[figureIdx - 1];
+    var found = state.scenes.find(function (s) { return (s.scene_title || s.scene_name) === title; });
+    if (found) startScene = found.scene_name;
+  }
   if (startScene) {
     await loadScene(startScene);
   } else if (state.scenes.length > 0) {
@@ -839,30 +899,82 @@ async function init() {
   }
 
   // 事件绑定
-  dom.submitGuessBtn?.addEventListener("click", submitGuess);
-  dom.nextRoundBtn?.addEventListener("click", async () => {
-    dom.nextRoundBtn.disabled = true;
-    dom.nextRoundBtn.textContent = "加载中…";
-    try {
-      await loadRandomScene();
-    } finally {
-      dom.nextRoundBtn.disabled = false;
-      dom.nextRoundBtn.textContent = "下一题";
+  dom.randomBtn.addEventListener("click", async function () {
+    dom.randomBtn.disabled = true;
+    dom.randomBtn.textContent = "加载中...";
+    try { await loadRandomScene(); } finally {
+      dom.randomBtn.disabled = false;
+      dom.randomBtn.textContent = "随机场景";
     }
   });
-  dom.mapRecenterBtn?.addEventListener("click", recenterMiniMap);
+  dom.mapRecenterBtn?.addEventListener("click", function () { recenterMiniMap(); });
+  dom.submitGuessBtn?.addEventListener("click", submitGuess);
 
-  document.body.classList.remove("is-loading");
-
-  // 非报告模式：低题量 prefetch
-  if (!IS_REPORT && state.playableCount < 10) {
-    try { await requestJson("/api/resources/prefetch"); } catch (e) { /* */ }
+  // 下一题
+  if (dom.nextRoundBtn) {
+    dom.nextRoundBtn.addEventListener("click", async function () {
+      dom.nextRoundBtn.disabled = true;
+      dom.nextRoundBtn.textContent = "加载中...";
+      try { await loadRandomScene(); } finally {
+        dom.nextRoundBtn.disabled = false;
+        dom.nextRoundBtn.textContent = "下一题";
+      }
+    });
   }
+
+  // 设置面板
+  setupSettingsPanel();
 }
 
-init().catch(err => {
-  console.error(err);
-  document.body.insertAdjacentHTML("afterbegin",
-    `<div style="padding:24px;color:#fee2e2;background:#7f1d1d;font-size:14px;position:fixed;top:0;left:0;right:0;z-index:9999">初始化失败：${err.message}</div>`
+// ---- 设置面板 ----
+function setupSettingsPanel() {
+  if (!dom.settingsFab || !dom.settingsPanel) return;
+  if (state.isReport) { dom.settingsFab.style.display = "none"; return; }
+
+  var open = false;
+  dom.settingsFab.addEventListener("click", function () {
+    open = !open;
+    dom.settingsPanel.style.display = open ? "block" : "none";
+    if (open) refreshUsage();
+  });
+
+  document.getElementById("btn-refresh-usage")?.addEventListener("click", refreshUsage);
+  document.getElementById("btn-prefetch")?.addEventListener("click", async function () {
+    var btn = document.getElementById("btn-prefetch");
+    if (!btn) return;
+    btn.disabled = true; btn.textContent = "下载中...";
+    try { await requestJson("/api/resources/prefetch"); await refreshUsage(); } catch (e) { console.warn(e); }
+    btn.disabled = false; btn.textContent = "预下载 5 景";
+  });
+  document.getElementById("btn-prune-by-mb")?.addEventListener("click", async function () {
+    var mb = parseFloat(document.getElementById("budget-mb")?.value || "500");
+    if (!confirm("将清理至约 " + mb + " MB，继续？")) return;
+    try {
+      var result = await requestJson("/api/resources/prune?max_mb=" + mb);
+      alert("已清理 " + result.pruned_count + " 个场景，释放 " + result.freed_mb + " MB");
+      location.reload();
+    } catch (e) { alert("清理失败: " + e.message); }
+  });
+}
+
+async function refreshUsage() {
+  try {
+    var data = await requestJson("/api/resources/status?usage=1");
+    if (data.usage) {
+      var u = data.usage;
+      var el = function (id) { var e = document.getElementById(id); if (e) e.textContent = arguments[1]; };
+      el("stat-pano-mb", u.pano_mb + " MB");
+      el("stat-other-mb", u.other_mb + " MB");
+      el("stat-total-mb", u.total_mb + " MB");
+      el("stat-playable", String(data.playable_count || 0));
+    }
+  } catch (e) { console.warn(e); }
+}
+
+init().catch((error) => {
+  console.error(error);
+  document.body.insertAdjacentHTML(
+    "afterbegin",
+    `<div style="padding: 24px; color: #fee2e2; background: #7f1d1d; font-size: 14px;">初始化失败：${error.message}</div>`,
   );
 });
