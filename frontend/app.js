@@ -481,7 +481,6 @@ function resetRoundState() {
   state.lastGuessLatLng = null;
   if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
   if (state.guessMarker) { state.guessMarker.remove(); state.guessMarker = null; }
-  dom.submitGuessBtn.disabled = true;
   if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "none";
   if (dom.quizZone) dom.quizZone.style.display = "none";
   if (dom.seasonQuiz) dom.seasonQuiz.style.display = "none";
