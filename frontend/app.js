@@ -946,8 +946,7 @@ async function init() {
     dom.mapBox?.classList.remove("is-ready");
   }
 
-  dom.sceneCount.textContent = formatValue(scenesResponse.total);
-  dom.inventoryCount.textContent = formatValue(config.playable_count || config.inventory_count);
+  if (dom.sceneCount) dom.sceneCount.textContent = formatValue(scenesResponse.total);
 
   // 报告模式六景导航
   var REPORT_SCENES = ["太和殿", "中和殿", "保和殿", "箭亭", "神武门", "天一门"];
