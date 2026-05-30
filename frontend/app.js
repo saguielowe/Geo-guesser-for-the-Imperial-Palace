@@ -481,6 +481,7 @@ function resetRoundState() {
   state.lastGuessLatLng = null;
   if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
   if (state.guessMarker) { state.guessMarker.remove(); state.guessMarker = null; }
+  dom.submitGuessBtn.disabled = true;
   if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "none";
   if (dom.quizZone) dom.quizZone.style.display = "none";
   if (dom.seasonQuiz) dom.seasonQuiz.style.display = "none";
@@ -580,7 +581,102 @@ function submitGuess() {
   state.roundNumber++;
   updateScoreboardUI();
 
-  // 显示下一题按钮
+  // 显示问答
+  startQuizFlow();
+}
+
+// ---- 问答流程 ----
+function startQuizFlow() {
+  var scene = state.currentScene;
+  if (!scene) { showNextRoundBtn(); return; }
+
+  // 季节小问（40%概率，且场景有多个季节）
+  if (Math.random() < 0.4 && Array.isArray(scene.seasons) && scene.seasons.length > 1) {
+    showSeasonQuiz();
+  } else {
+    showKnowledgeQuiz();
+  }
+}
+
+function showSeasonQuiz() {
+  var scene = state.currentScene;
+  var correct = scene.season_hint || (Array.isArray(scene.seasons) ? scene.seasons[0] : "summer");
+  var options = Array.isArray(scene.seasons) ? scene.seasons.slice() : [correct];
+  if (!options.includes(correct)) options.push(correct);
+  // 去重并打乱
+  options = options.filter(function (v, i, a) { return a.indexOf(v) === i; });
+  options.sort(function () { return Math.random() - 0.5; });
+
+  if (dom.seasonQuiz) dom.seasonQuiz.style.display = "block";
+  if (dom.quizZone) dom.quizZone.style.display = "block";
+  if (dom.seasonQuestion) dom.seasonQuestion.textContent = "这个场景拍摄于哪个季节？";
+  if (dom.seasonOptions) {
+    dom.seasonOptions.innerHTML = "";
+    options.forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.textContent = opt;
+      btn.addEventListener("click", function () {
+        var isCorrect = opt === correct;
+        btn.classList.add(isCorrect ? "is-correct" : "is-wrong");
+        dom.seasonOptions.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+        if (isCorrect) { state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI(); }
+        setTimeout(function () {
+          if (dom.seasonQuiz) dom.seasonQuiz.style.display = "none";
+          showKnowledgeQuiz();
+        }, 800);
+      });
+      dom.seasonOptions.appendChild(btn);
+    });
+  }
+}
+
+function showKnowledgeQuiz() {
+  // 从 knowledge API 获取当前场景的知识问答
+  var scene = state.currentScene;
+  var knItems = state.knowledgeData.filter(function (k) {
+    return k.scene_name === (scene ? scene.scene_name : "");
+  });
+  state.currentKnowledge = knItems.length > 0 ? knItems[Math.floor(Math.random() * knItems.length)] : null;
+
+  if (!state.currentKnowledge || !state.currentKnowledge.question) {
+    showNextRoundBtn();
+    return;
+  }
+
+  var kn = state.currentKnowledge;
+  var options = (kn.options || []).slice();
+  if (!options.includes(kn.answer)) options.push(kn.answer);
+  options.sort(function () { return Math.random() - 0.5; });
+
+  if (dom.knowledgeQuiz) dom.knowledgeQuiz.style.display = "block";
+  if (dom.quizZone) dom.quizZone.style.display = "block";
+  if (dom.knowledgeQuestion) dom.knowledgeQuestion.textContent = kn.question;
+  if (dom.knowledgeOptions) {
+    dom.knowledgeOptions.innerHTML = "";
+    options.forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.textContent = opt;
+      btn.addEventListener("click", function () {
+        var isCorrect = opt === kn.answer;
+        btn.classList.add(isCorrect ? "is-correct" : "is-wrong");
+        dom.knowledgeOptions.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+        if (isCorrect) { state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI(); }
+        if (kn.fact && dom.knowledgeFact) {
+          dom.knowledgeFact.textContent = "💡 " + kn.fact;
+          dom.knowledgeFact.style.display = "block";
+        }
+        setTimeout(function () {
+          if (dom.knowledgeQuiz) dom.knowledgeQuiz.style.display = "none";
+          showNextRoundBtn();
+        }, 1500);
+      });
+      dom.knowledgeOptions.appendChild(btn);
+    });
+  }
+}
+
+function showNextRoundBtn() {
+  if (dom.quizZone) dom.quizZone.style.display = "none";
   if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "block";
 }
 
@@ -675,6 +771,7 @@ function installMiniMap() {
       icon: createDotIcon("guess-dot"),
       title: "猜测点",
     }).addTo(state.map);
+    dom.submitGuessBtn.disabled = false;
   });
   dom.mapBox?.classList.add("is-ready");
   if (dom.mapPlaceholder) {
@@ -857,6 +954,11 @@ async function init() {
 
   state.scenes = scenesResponse.items || [];
   state.bounds = config.bounds;
+  // 加载知识题库
+  try {
+    var knResp = await requestJson("/api/knowledge");
+    state.knowledgeData = knResp.items || [];
+  } catch (e) { state.knowledgeData = []; }
   state.mapFocusBounds = null;
   installMiniMap();
   if (!state.map && dom.mapPlaceholder) {
