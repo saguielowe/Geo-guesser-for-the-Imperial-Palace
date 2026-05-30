@@ -38,6 +38,11 @@ from resource_manager import (  # noqa: E402
     load_anchor_catalog,
     _queue,
     list_local_scenes,
+    mark_played,
+    get_played_scenes,
+    get_resource_config,
+    set_resource_config,
+    auto_prefetch_check,
 )
 TOUR_XML_PATH = RAW_DIR / "project_tour.xml"
 REQUEST_LOG_PATH = ROOT / "logs" / "viewer-network-requests.jsonl"
@@ -930,15 +935,23 @@ class AppHandler(BaseHTTPRequestHandler):
         if pathname == "/api/resources/status":
             params = parse_qs(parsed.query)
             include_usage = params.get("usage", ["0"])[0] == "1"
+            played = get_played_scenes()
+            local_names = set(list_local_scenes(STATE["scenes"]))
+            unplayed_local = local_names - played
             payload: Dict[str, Any] = {
                 "playable_count": STATE["playable_count"],
                 "total_scenes": len(STATE["scenes"]),
                 "catalog_source": STATE["catalog_source"],
                 "download_queue": _queue.status(),
+                "played_count": len(played),
+                "unplayed_local_count": len(unplayed_local),
             }
             if include_usage:
                 payload["usage"] = compute_usage()
             return self._send_json(HTTPStatus.OK, payload)
+
+        if pathname == "/api/resources/config":
+            return self._send_json(HTTPStatus.OK, get_resource_config())
 
         if pathname == "/api/resources/prefetch":
             prefetched = prefetch_scenes(STATE["scenes"], max_scenes=5)
@@ -1097,6 +1110,33 @@ class AppHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         pathname = unquote(parsed.path)
+
+        if pathname == "/api/resources/played":
+            try:
+                payload = self._read_json_body()
+                scene_name = str(payload.get("scene_name") or "").strip()
+                if scene_name:
+                    mark_played(scene_name)
+                    played = get_played_scenes()
+                    return self._send_json(HTTPStatus.OK, {
+                        "ok": True,
+                        "scene_name": scene_name,
+                        "played_count": len(played),
+                    })
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "missing scene_name"})
+            except json.JSONDecodeError:
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_json"})
+
+        if pathname == "/api/resources/config":
+            try:
+                payload = self._read_json_body()
+                mode = str(payload.get("download_mode") or "").strip()
+                if mode in ("manual", "lazy"):
+                    cfg = set_resource_config({"download_mode": mode})
+                    return self._send_json(HTTPStatus.OK, {"ok": True, "config": cfg})
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid download_mode, use manual or lazy"})
+            except json.JSONDecodeError:
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_json"})
 
         if pathname == "/api/debug/mapping":
             try:

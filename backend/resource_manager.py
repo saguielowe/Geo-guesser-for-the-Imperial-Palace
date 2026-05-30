@@ -358,5 +358,89 @@ class DownloadQueue:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")
 
 
+# ---- 场景播放记录 ----
+PLAYED_SCENES_PATH = PROCESSED_DIR / "played_scenes.json"
+_played_cache: Optional[Set[str]] = None
+_played_lock = threading.Lock()
+
+def _load_played() -> Set[str]:
+    if not PLAYED_SCENES_PATH.exists():
+        return set()
+    try:
+        data = _read_json(PLAYED_SCENES_PATH)
+        if isinstance(data, list):
+            return set(data)
+    except Exception:
+        pass
+    return set()
+
+def get_played_scenes() -> Set[str]:
+    global _played_cache
+    with _played_lock:
+        if _played_cache is None:
+            _played_cache = _load_played()
+        return _played_cache
+
+def mark_played(scene_name: str) -> None:
+    global _played_cache
+    with _played_lock:
+        if _played_cache is None:
+            _played_cache = _load_played()
+        _played_cache.add(scene_name)
+        PLAYED_SCENES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PLAYED_SCENES_PATH.write_text(
+            json.dumps(sorted(_played_cache), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+# ---- 下载模式配置 ----
+RESOURCE_CONFIG_PATH = PROCESSED_DIR / "resource_config.json"
+DEFAULT_CONFIG = {"download_mode": "manual"}  # "manual" | "lazy"
+
+def get_resource_config() -> Dict[str, Any]:
+    data = _read_json(RESOURCE_CONFIG_PATH)
+    if isinstance(data, dict):
+        return {**DEFAULT_CONFIG, **data}
+    return dict(DEFAULT_CONFIG)
+
+def set_resource_config(updates: Dict[str, Any]) -> Dict[str, Any]:
+    current = get_resource_config()
+    current.update(updates)
+    RESOURCE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RESOURCE_CONFIG_PATH.write_text(
+        json.dumps(current, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return current
+
+# ---- 自动预取 ----
+AUTO_PREFETCH_THRESHOLD = 5  # 剩余未玩场景不足时触发
+
+def auto_prefetch_check(catalog: List[Dict[str, Any]]) -> Optional[List[str]]:
+    """如果懒下载模式且未玩本地场景不足，返回待下载列表。"""
+    config = get_resource_config()
+    if config.get("download_mode") != "lazy":
+        return None
+
+    local = set(list_local_scenes(catalog))
+    played = get_played_scenes()
+    unplayed_local = local - played
+    unplayed_all = {str(r.get("scene_name") or "") for r in catalog} - played
+
+    if len(unplayed_local) >= AUTO_PREFETCH_THRESHOLD:
+        return None
+
+    # 从未下载的未玩场景中选
+    need = [name for name in unplayed_all if name not in local]
+    if not need:
+        return None
+
+    # 优先锚点场景
+    anchored = _get_anchored_scenes()
+    need.sort(key=lambda n: (0 if n in anchored else 1, n))
+
+    return need[:5]
+
+
 # 全局单例
 _queue = DownloadQueue()

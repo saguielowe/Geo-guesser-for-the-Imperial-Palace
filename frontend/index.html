@@ -173,9 +173,16 @@
         <div><span>全景占用</span><span id="stat-pano-mb">--</span></div>
         <div><span>其它占用</span><span id="stat-other-mb">--</span></div>
         <div><span>合计</span><span id="stat-total-mb">--</span></div>
-        <div><span>已缓存</span><span id="stat-playable">--</span></div>
+        <div><span>已缓存/未玩</span><span id="stat-playable">--</span></div>
+        <div><span>已玩</span><span id="stat-played">--</span></div>
       </div>
       <div class="settings-actions">
+        <label>下载模式
+          <select id="download-mode-select">
+            <option value="manual">不自动下载</option>
+            <option value="lazy">懒下载</option>
+          </select>
+        </label>
         <label>磁盘预算(MB) <input id="budget-mb" type="number" min="50" value="500" step="10"></label>
         <button id="btn-prefetch" class="btn-small">预下载 5 景</button>
         <button id="btn-prune-by-mb" class="btn-small btn-danger">按容量清理</button>

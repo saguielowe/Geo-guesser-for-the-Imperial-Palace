@@ -567,6 +567,11 @@ function submitGuess() {
   state.roundNumber++;
   updateScoreboardUI();
 
+  // 标记已玩 + 懒下载自动预取
+  if (state.currentScene && state.currentScene.scene_name) {
+    markPlayedAndPrefetch(state.currentScene.scene_name);
+  }
+
   // 下一题按钮立即显示
   if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "block";
   // 出问答
@@ -1019,6 +1024,20 @@ function setupSettingsPanel() {
       location.reload();
     } catch (e) { alert("清理失败: " + e.message); }
   });
+
+  // 下载模式切换
+  var modeSelect = document.getElementById("download-mode-select");
+  if (modeSelect) {
+    modeSelect.addEventListener("change", async function () {
+      try {
+        await fetch("/api/resources/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ download_mode: modeSelect.value }),
+        });
+      } catch (e) { console.warn(e); }
+    });
+  }
 }
 
 async function refreshUsage() {
@@ -1026,13 +1045,39 @@ async function refreshUsage() {
     var data = await requestJson("/api/resources/status?usage=1");
     if (data.usage) {
       var u = data.usage;
-      var el = function (id) { var e = document.getElementById(id); if (e) e.textContent = arguments[1]; };
+      var el = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
       el("stat-pano-mb", u.pano_mb + " MB");
       el("stat-other-mb", u.other_mb + " MB");
       el("stat-total-mb", u.total_mb + " MB");
-      el("stat-playable", String(data.playable_count || 0));
+      el("stat-playable", (data.unplayed_local_count || 0) + " / " + (data.playable_count || 0));
+      el("stat-played", String(data.played_count || 0));
     }
+    // 同步下载模式
+    var cfg = await requestJson("/api/resources/config");
+    var sel = document.getElementById("download-mode-select");
+    if (sel && cfg.download_mode) sel.value = cfg.download_mode;
   } catch (e) { console.warn(e); }
+}
+
+// 标记已玩 + 懒下载自动预取
+async function markPlayedAndPrefetch(sceneName) {
+  try {
+    await fetch("/api/resources/played", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ scene_name: sceneName }),
+    });
+  } catch (e) { /* silent */ }
+  // 懒下载模式：剩余不足时自动触发
+  try {
+    var cfg = await requestJson("/api/resources/config");
+    if (cfg.download_mode === "lazy") {
+      var status = await requestJson("/api/resources/status");
+      if ((status.unplayed_local_count || 0) < 5) {
+        await requestJson("/api/resources/prefetch");
+      }
+    }
+  } catch (e) { /* silent */ }
 }
 
 init().catch((error) => {
