@@ -468,7 +468,6 @@ function resetRoundState() {
   if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
   if (state.guessMarker) { state.guessMarker.remove(); state.guessMarker = null; }
   dom.submitGuessBtn.disabled = true;
-  if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "none";
   if (dom.quizZone) dom.quizZone.style.display = "none";
   if (dom.seasonQuiz) dom.seasonQuiz.style.display = "none";
   if (dom.knowledgeQuiz) dom.knowledgeQuiz.style.display = "none";
@@ -569,11 +568,10 @@ function submitGuess() {
 
   // 标记已玩 + 懒下载自动预取
   if (state.currentScene && state.currentScene.scene_name) {
+    playedScenes[state.currentScene.scene_name] = true;
     markPlayedAndPrefetch(state.currentScene.scene_name);
   }
 
-  // 下一题按钮立即显示
-  if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "block";
   // 出问答
   startQuizFlow();
 }
@@ -603,13 +601,18 @@ function showSeasonQuiz() {
       btn.textContent = opt;
       btn.addEventListener("click", function () {
         var isCorrect = opt === correctCN;
-        btn.classList.add(isCorrect ? "is-correct" : "is-wrong");
         dom.seasonOptions.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
-        if (isCorrect) { state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI(); }
-        setTimeout(function () {
-          if (dom.seasonQuiz) dom.seasonQuiz.style.display = "none";
-          showKnowledgeQuiz();
-        }, 600);
+        if (!isCorrect) {
+          btn.classList.add("is-wrong");
+          // 标出正确答案
+          dom.seasonOptions.querySelectorAll("button").forEach(function (b) {
+            if (b.textContent === correctCN) b.classList.add("is-correct");
+          });
+        } else {
+          btn.classList.add("is-correct");
+          state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI();
+        }
+        showKnowledgeQuiz();
       });
       dom.seasonOptions.appendChild(btn);
     });
@@ -619,9 +622,7 @@ function showSeasonQuiz() {
 function showKnowledgeQuiz() {
   var scene = state.currentScene;
   if (!scene) return;
-  // 正确答案 = 当前场景标题
   var correct = scene.scene_title || scene.scene_name;
-  // 从其他场景随机抽3个混淆标题
   var pool = state.scenes.filter(function (s) {
     return s.scene_name !== scene.scene_name && (s.scene_title || s.scene_name);
   });
@@ -640,12 +641,18 @@ function showKnowledgeQuiz() {
       btn.textContent = opt;
       btn.addEventListener("click", function () {
         var isCorrect = opt === correct;
-        btn.classList.add(isCorrect ? "is-correct" : "is-wrong");
         dom.knowledgeOptions.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
-        if (isCorrect) { state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI(); }
-        setTimeout(function () {
-          if (dom.knowledgeQuiz) dom.knowledgeQuiz.style.display = "none";
-        }, 800);
+        if (!isCorrect) {
+          btn.classList.add("is-wrong");
+          // 标出正确答案
+          dom.knowledgeOptions.querySelectorAll("button").forEach(function (b) {
+            if (b.textContent === correct) b.classList.add("is-correct");
+          });
+        } else {
+          btn.classList.add("is-correct");
+          state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI();
+        }
+        // 保留显示，不隐藏
       });
       dom.knowledgeOptions.appendChild(btn);
     });
@@ -836,31 +843,16 @@ function renderViewer(scene) {
 function renderScene(scene) {
   state.currentScene = scene;
   resetRoundState();
-  dom.sceneTitle.textContent = scene.scene_title || scene.scene_name || "未命名场景";
-  dom.sceneName.textContent = scene.scene_name || "-";
-  dom.panoramaName.textContent = scene.panorama_name || "-";
-  dom.sceneGroup.textContent = scene.scene_group_name || "-";
-  dom.sceneSeasons.textContent = Array.isArray(scene.seasons) ? scene.seasons.join(", ") : "-";
-  dom.coordX.textContent = formatValue(scene.coordinate_x);
-  dom.coordY.textContent = formatValue(scene.coordinate_y);
-  updateGuessDisplay(null);
+  dom.sceneTitle.textContent = "故宫一景";
   state.scoreValue = 0;
-  resetRoundResultDisplay();
-  renderDebugTiles(scene);
+  if (dom.guessScore) dom.guessScore.textContent = "-";
   renderViewer(scene);
   renderMapForScene(scene);
-  renderViewerUsedTiles(scene);
-  window.setTimeout(() => renderViewerUsedTiles(scene), 1000);
-  window.setTimeout(() => renderViewerUsedTiles(scene), 2500);
+  // 停止之前的瓦片轮询
   if (state.usedTilesPollTimer) {
     window.clearInterval(state.usedTilesPollTimer);
+    state.usedTilesPollTimer = null;
   }
-  state.usedTilesPollTimer = window.setInterval(() => {
-    if (!state.currentScene || state.currentScene.scene_name !== scene.scene_name) {
-      return;
-    }
-    renderViewerUsedTiles(scene);
-  }, 1000);
 }
 
 async function requestJson(url, options = {}) {
@@ -877,14 +869,29 @@ async function requestJson(url, options = {}) {
   return response.json();
 }
 
+// 已玩场景集合
+var playedScenes = {};
+
 async function loadScene(sceneName) {
-  const scene = await requestJson(`/api/scenes/${encodeURIComponent(sceneName)}`);
+  var scene = await requestJson("/api/scenes/" + encodeURIComponent(sceneName));
   renderScene(scene);
 }
 
-async function loadRandomScene() {
-  const scene = await requestJson("/api/scenes/random");
-  renderScene(scene);
+async function loadNextScene() {
+  // 从未玩过的本地场景中选
+  var localScenes = state.scenes.filter(function (s) {
+    return (s.local_tile_count || 0) > 0 && s.scene_name !== "scene_debug_tiles";
+  });
+  var unplayed = localScenes.filter(function (s) {
+    return !playedScenes[s.scene_name];
+  });
+  // 全玩过了就重置
+  if (unplayed.length === 0) {
+    playedScenes = {};
+    unplayed = localScenes;
+  }
+  var pick = unplayed[Math.floor(Math.random() * unplayed.length)];
+  renderScene(pick);
 }
 
 async function init() {
@@ -963,28 +970,25 @@ async function init() {
   }
   if (startScene) {
     await loadScene(startScene);
+    if (state.currentScene) playedScenes[state.currentScene.scene_name] = true;
   } else if (state.scenes.length > 0) {
-    await loadRandomScene();
+    await loadNextScene();
+    if (state.currentScene) playedScenes[state.currentScene.scene_name] = true;
   }
 
   // 事件绑定
-  dom.randomBtn.addEventListener("click", async function () {
-    dom.randomBtn.disabled = true;
-    dom.randomBtn.textContent = "加载中...";
-    try { await loadRandomScene(); } finally {
-      dom.randomBtn.disabled = false;
-      dom.randomBtn.textContent = "随机场景";
-    }
-  });
   dom.mapRecenterBtn?.addEventListener("click", function () { recenterMiniMap(); });
   dom.submitGuessBtn?.addEventListener("click", submitGuess);
 
-  // 下一题
+  // 下一题按钮（始终可见，替换原随机场景按钮）
   if (dom.nextRoundBtn) {
     dom.nextRoundBtn.addEventListener("click", async function () {
       dom.nextRoundBtn.disabled = true;
       dom.nextRoundBtn.textContent = "加载中...";
-      try { await loadRandomScene(); } finally {
+      try {
+        await loadNextScene();
+        if (state.currentScene) playedScenes[state.currentScene.scene_name] = true;
+      } finally {
         dom.nextRoundBtn.disabled = false;
         dom.nextRoundBtn.textContent = "下一题";
       }
