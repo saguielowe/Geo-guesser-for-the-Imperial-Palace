@@ -28,10 +28,15 @@ const state = {
   currentKnowledge: null,
   isReport: false,
   isSound: false,
+  // 锚点采集模式
+  isDebugAnchors: false,
+  debugScenes: [],
+  debugAnchorMarker: null,
 };
 
 const dom = {
   sceneCount: document.getElementById("scene-count"),
+  playedCount: document.getElementById("played-count"),
   inventoryCount: document.getElementById("inventory-count"),
   sceneTitle: document.getElementById("scene-title"),
   sceneName: document.getElementById("scene-name"),
@@ -81,6 +86,12 @@ const dom = {
   settingsFab: document.getElementById("settings-fab"),
   settingsPanel: document.getElementById("settings-panel"),
   reportFigureNav: document.getElementById("report-figure-nav"),
+  // 锚点采集模式
+  debugAnchorBar: document.getElementById("debug-anchor-bar"),
+  debugSceneSelect: document.getElementById("debug-scene-select"),
+  debugAnchorStatus: document.getElementById("debug-anchor-status"),
+  debugAnchorStats: document.getElementById("debug-anchor-stats"),
+  debugReloadBtn: document.getElementById("debug-reload-btn"),
 };
 
 function normalizeTilePath(urlLike) {
@@ -353,17 +364,11 @@ function applyMapPixelToCoord(pixelX, pixelY) {
 }
 
 function updateGuessDisplay(guess) {
-  dom.guessX.textContent = guess ? formatValue(guess.x) : "-";
-  dom.guessY.textContent = guess ? formatValue(guess.y) : "-";
+  // 已隐藏坐标显示，仅保留内部状态
 }
 
 function resetRoundResultDisplay() {
-  if (dom.guessDistance) {
-    dom.guessDistance.textContent = "-";
-  }
-  if (dom.guessScore) {
-    dom.guessScore.textContent = "-";
-  }
+  if (dom.guessScore) dom.guessScore.textContent = "-";
 }
 
 function scoreByDistance(distance) {
@@ -467,6 +472,7 @@ function resetRoundState() {
   state.lastGuessLatLng = null;
   if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
   if (state.guessMarker) { state.guessMarker.remove(); state.guessMarker = null; }
+  if (state.debugAnchorMarker) { state.debugAnchorMarker.remove(); state.debugAnchorMarker = null; }
   dom.submitGuessBtn.disabled = true;
   if (dom.quizZone) dom.quizZone.style.display = "none";
   if (dom.seasonQuiz) dom.seasonQuiz.style.display = "none";
@@ -566,9 +572,10 @@ function submitGuess() {
   state.roundNumber++;
   updateScoreboardUI();
 
-  // 标记已玩 + 懒下载自动预取
+  // 标记已玩 + 更新顶栏
   if (state.currentScene && state.currentScene.scene_name) {
     playedScenes[state.currentScene.scene_name] = true;
+    if (dom.playedCount) dom.playedCount.textContent = String(Object.keys(playedScenes).length);
     markPlayedAndPrefetch(state.currentScene.scene_name);
   }
 
@@ -733,6 +740,11 @@ function installMiniMap() {
     recenterMiniMap();
   }
   state.map.on("click", (event) => {
+    // 锚点采集模式：点击即保存
+    if (state.isDebugAnchors) {
+      handleDebugAnchorClick(event);
+      return;
+    }
     if (state.roundSubmitted) return; // 提交后不允许再选点
     const point = state.map.project(event.latlng, MAP_MAX_ZOOM);
     const guess = applyMapPixelToCoord(point.x, point.y);
@@ -894,12 +906,198 @@ async function loadNextScene() {
   renderScene(pick);
 }
 
+// ---- 锚点采集模式 ----
+async function loadDebugScenes() {
+  try {
+    const resp = await requestJson("/api/debug/scenes");
+    state.debugScenes = resp.items || [];
+    return resp;
+  } catch (e) {
+    console.warn("加载 debug 场景列表失败", e);
+    state.debugScenes = [];
+    return { items: [], total: 0, anchored_count: 0, unanchored_count: 0 };
+  }
+}
+
+function populateDebugSceneSelect() {
+  if (!dom.debugSceneSelect) return;
+  const sel = dom.debugSceneSelect;
+  sel.innerHTML = '<option value="">-- 选择场景 --</option>';
+
+  // 按区域分组
+  const groups = {};
+  state.debugScenes.forEach(function (s) {
+    const g = s.panorama_name || "其他";
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(s);
+  });
+
+  Object.keys(groups).sort().forEach(function (g) {
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = g;
+    groups[g].forEach(function (s) {
+      const opt = document.createElement("option");
+      opt.value = s.scene_name;
+      opt.textContent = (s.has_anchor ? "✅ " : "⬜ ") + (s.scene_title || s.scene_name);
+      opt.dataset.anchored = s.has_anchor ? "1" : "0";
+      optgroup.appendChild(opt);
+    });
+    sel.appendChild(optgroup);
+  });
+
+  updateDebugStats();
+}
+
+function updateDebugStats() {
+  if (!dom.debugAnchorStats) return;
+  const anchored = state.debugScenes.filter(function (s) { return s.has_anchor; }).length;
+  const total = state.debugScenes.length;
+  dom.debugAnchorStats.textContent = "已标注 " + anchored + " / " + total + " 景";
+}
+
+function updateDebugAnchorStatus(scene) {
+  if (!dom.debugAnchorStatus) return;
+  if (!scene) {
+    dom.debugAnchorStatus.textContent = "--";
+    dom.debugAnchorStatus.className = "debug-status";
+    return;
+  }
+  // 在 debugScenes 中查找
+  const found = state.debugScenes.find(function (s) { return s.scene_name === scene.scene_name; });
+  if (found && found.has_anchor) {
+    dom.debugAnchorStatus.textContent = "✅ 已标注";
+    dom.debugAnchorStatus.className = "debug-status has-anchor";
+  } else if (scene.user_x != null || scene.click_pixel_xy) {
+    dom.debugAnchorStatus.textContent = "✅ 已标注";
+    dom.debugAnchorStatus.className = "debug-status has-anchor";
+  } else {
+    dom.debugAnchorStatus.textContent = "⬜ 未标注";
+    dom.debugAnchorStatus.className = "debug-status no-anchor";
+  }
+}
+
+function handleDebugAnchorClick(event) {
+  if (!state.currentScene) return;
+  const point = state.map.project(event.latlng, MAP_MAX_ZOOM);
+  const coord = applyMapPixelToCoord(point.x, point.y);
+  if (!coord) return;
+
+  // 更新或创建 anchor 标记
+  if (state.debugAnchorMarker) {
+    state.debugAnchorMarker.remove();
+  }
+  state.debugAnchorMarker = window.L.marker(event.latlng, {
+    icon: createDotIcon("anchor-debug-dot"),
+    title: "锚点位置",
+  }).addTo(state.map);
+
+  // 立即保存
+  saveDebugAnchor(coord, point);
+}
+
+async function saveDebugAnchor(coord, pixel) {
+  if (!state.currentScene) return;
+  const scene = state.currentScene;
+
+  const payload = {
+    scene_name: scene.scene_name,
+    scene_title: scene.scene_title || "",
+    pano_stub: scene.pano_stub || "",
+    panorama_id: scene.panorama_id,
+    scene_id: scene.scene_id,
+    panorama_name: scene.panorama_name || "",
+    scene_group_name: scene.scene_group_name || "",
+    season_hint: scene.season_hint || "",
+    seasons: scene.seasons || [],
+    coordinate: scene.coordinate || "",
+    x_axis: scene.x_axis,
+    y_axis: scene.y_axis,
+    tile_size: scene.tile_size || 512,
+    tiled_widths_desc: scene.tiled_widths_desc || [],
+    preview_url: scene.preview_url || "",
+    user_x: coord.x,
+    user_y: coord.y,
+    click_pixel_xy: [pixel.px, pixel.py],
+  };
+
+  try {
+    const result = await fetch("/api/debug/anchor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    }).then(function (r) { return r.json(); });
+
+    if (result.ok) {
+      showDebugToast("✅ 已保存: " + (scene.scene_title || scene.scene_name));
+      // 更新本地状态
+      state.currentScene.user_x = coord.x;
+      state.currentScene.user_y = coord.y;
+      state.currentScene.click_pixel_xy = [pixel.px, pixel.py];
+      // 更新 debug 列表中的状态
+      var found = state.debugScenes.find(function (s) { return s.scene_name === scene.scene_name; });
+      if (found) {
+        found.has_anchor = true;
+        found.user_x = coord.x;
+        found.user_y = coord.y;
+        found.click_pixel_xy = [pixel.px, pixel.py];
+      }
+      populateDebugSceneSelect();
+      updateDebugAnchorStatus(scene);
+      // 刷新 STATE
+      await requestJson("/api/config");
+      // 重绘真值点
+      renderMapForScene(scene);
+    } else {
+      showDebugToast("❌ 保存失败: " + (result.error || "unknown"));
+    }
+  } catch (e) {
+    showDebugToast("❌ 网络错误: " + e.message);
+  }
+}
+
+function showDebugToast(message) {
+  // 复用 perfect toast 或创建简单 toast
+  var toast = document.getElementById("debug-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "debug-toast";
+    toast.style.cssText = "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e3a5f;color:#f0f9ff;padding:10px 24px;border-radius:8px;font-size:15px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);transition:opacity 0.3s;pointer-events:none;";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.style.opacity = "1";
+  toast.style.display = "block";
+  clearTimeout(toast._timeout);
+  toast._timeout = setTimeout(function () {
+    toast.style.opacity = "0";
+    setTimeout(function () { toast.style.display = "none"; }, 300);
+  }, 2000);
+}
+
+async function loadDebugScene(sceneName) {
+  try {
+    var scene = await requestJson("/api/scenes/" + encodeURIComponent(sceneName));
+    renderScene(scene);
+    updateDebugAnchorStatus(scene);
+    // 同步 select
+    if (dom.debugSceneSelect) dom.debugSceneSelect.value = sceneName;
+    // 更新真值点（如果有的话）
+    if (scene.user_x != null || scene.click_pixel_xy) {
+      setTimeout(function () { renderMapForScene(scene); }, 500);
+    }
+  } catch (e) {
+    showDebugToast("❌ 加载场景失败: " + e.message);
+  }
+}
+
 async function init() {
   // URL 参数
   var params = new URLSearchParams(window.location.search);
   state.isReport = params.get("report") === "1";
   state.isSound = params.get("sound") === "1";
   var figureIdx = parseInt(params.get("figure") || "0", 10);
+
+  state.isDebugAnchors = params.get("debug") === "anchors";
 
   if (state.isReport) {
     document.body.classList.add("is-report-mode");
@@ -908,6 +1106,39 @@ async function init() {
     if (dom.settingsFab) dom.settingsFab.style.display = "none";
   }
   if (dom.versionBadge) dom.versionBadge.textContent = "1.0";
+
+  // 锚点采集模式
+  if (state.isDebugAnchors) {
+    document.body.classList.add("is-debug-anchors");
+    if (dom.debugAnchorBar) dom.debugAnchorBar.style.display = "flex";
+    if (dom.settingsFab) dom.settingsFab.style.display = "none";
+    // 加载 debug 场景列表
+    var debugResp = await loadDebugScenes();
+    populateDebugSceneSelect();
+    // 场景选择器事件
+    if (dom.debugSceneSelect) {
+      dom.debugSceneSelect.addEventListener("change", function () {
+        var name = dom.debugSceneSelect.value;
+        if (name) loadDebugScene(name);
+      });
+    }
+    // 刷新按钮
+    if (dom.debugReloadBtn) {
+      dom.debugReloadBtn.addEventListener("click", async function () {
+        dom.debugReloadBtn.disabled = true;
+        dom.debugReloadBtn.textContent = "刷新中...";
+        await loadDebugScenes();
+        populateDebugSceneSelect();
+        dom.debugReloadBtn.disabled = false;
+        dom.debugReloadBtn.textContent = "刷新列表";
+      });
+    }
+    // 隐藏游戏 UI
+    if (dom.submitGuessBtn) dom.submitGuessBtn.style.display = "none";
+    if (dom.nextRoundBtn) dom.nextRoundBtn.style.display = "none";
+    if (dom.scoreBoard) dom.scoreBoard.style.display = "none";
+    if (dom.guessScore) dom.guessScore.parentElement.style.display = "none";
+  }
 
   installViewerUsageProbe();
   var config = await requestJson("/api/config");

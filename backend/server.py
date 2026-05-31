@@ -23,8 +23,10 @@ PROCESSED_DIR = DATA_DIR / "processed"
 FRONTEND_DIR = ROOT / "frontend"
 CATALOG_PATH = PROCESSED_DIR / "scene_catalog.mvp20.local.json"
 ANCHOR_CATALOG_PATH = PROCESSED_DIR / "scene_catalog.demo_anchors.local.json"
+PHASE0_CATALOG_PATH = PROCESSED_DIR / "scene_catalog.phase0.json"
 INVENTORY_PATH = PROCESSED_DIR / "local_tiles_inventory.json"
 KNOWLEDGE_PATH = PROCESSED_DIR / "scene_knowledge.json"
+ANCHOR_POINTS_PATH = PROCESSED_DIR / "map_anchor_points.captured.json"
 
 import sys as _sys
 _backend_dir = Path(__file__).resolve().parent
@@ -827,6 +829,186 @@ def load_state() -> Dict[str, Any]:
 STATE = load_state()
 
 
+# ---- Debug anchor mode ----
+def _load_phase0_scenes_with_anchor_status() -> List[Dict[str, Any]]:
+    """列出 phase0 中所有有本地瓦片的场景，并标记锚点状态。"""
+    if not PHASE0_CATALOG_PATH.exists():
+        return []
+    raw = read_json(PHASE0_CATALOG_PATH)
+    if not isinstance(raw, list):
+        return []
+
+    # 已标注的 scene_name 集合
+    anchored: set = set()
+    if ANCHOR_POINTS_PATH.exists():
+        try:
+            pts = read_json(ANCHOR_POINTS_PATH)
+            if isinstance(pts, list):
+                for p in pts:
+                    n = str(p.get("scene_name") or "").strip()
+                    if n:
+                        anchored.add(n)
+        except Exception:
+            pass
+
+    # 已下载的场景
+    local_set: set = set()
+    if INVENTORY_PATH.exists():
+        try:
+            inv = read_json(INVENTORY_PATH)
+            if isinstance(inv, list):
+                for row in inv:
+                    stub = str(row.get("pano_stub") or "").strip()
+                    if stub:
+                        local_set.add(stub)
+        except Exception:
+            pass
+
+    result: List[Dict[str, Any]] = []
+    for row in raw:
+        stub = str(row.get("pano_stub") or "").strip()
+        name = str(row.get("scene_name") or "").strip()
+        if not stub or stub not in local_set:
+            continue
+        result.append({
+            "scene_name": name,
+            "scene_title": row.get("scene_title", ""),
+            "pano_stub": stub,
+            "panorama_id": row.get("panorama_id"),
+            "panorama_name": row.get("panorama_name", ""),
+            "scene_group_name": row.get("scene_group_name", ""),
+            "season_hint": row.get("season_hint", ""),
+            "seasons": row.get("seasons", []),
+            "coordinate": row.get("coordinate", ""),
+            "x_axis": row.get("x_axis"),
+            "y_axis": row.get("y_axis"),
+            "scene_id": row.get("scene_id"),
+            "tile_size": row.get("tile_size"),
+            "tiled_widths_desc": row.get("tiled_widths_desc", []),
+            "preview_url": row.get("preview_url", ""),
+            "has_anchor": name in anchored,
+            "user_x": row.get("user_x"),
+            "user_y": row.get("user_y"),
+            "click_pixel_xy": row.get("click_pixel_xy"),
+        })
+
+    # 排序：未标注优先，同区域集中
+    result.sort(key=lambda s: (
+        0 if s["has_anchor"] else 1,
+        s.get("panorama_name") or "",
+        s.get("scene_group_name") or "",
+        s.get("scene_name") or "",
+    ))
+    return result
+
+
+def _save_anchor_point(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """保存锚点到 captured.json 和 demo catalog，两文件同步更新。"""
+    from datetime import datetime, timezone, timedelta
+
+    scene_name = str(payload.get("scene_name") or "").strip()
+    if not scene_name:
+        raise ValueError("missing scene_name")
+
+    now_ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%dT%H:%M:%S")
+
+    # 1) 更新 map_anchor_points.captured.json
+    captured: List[Dict[str, Any]] = []
+    if ANCHOR_POINTS_PATH.exists():
+        try:
+            captured = read_json(ANCHOR_POINTS_PATH)
+            if not isinstance(captured, list):
+                captured = []
+        except Exception:
+            captured = []
+
+    existing_idx = None
+    for i, pt in enumerate(captured):
+        if str(pt.get("scene_name") or "").strip() == scene_name:
+            existing_idx = i
+            break
+
+    anchor_entry = {
+        "scene_name": scene_name,
+        "scene_title": payload.get("scene_title", ""),
+        "scene_id": payload.get("scene_id"),
+        "panorama_id": payload.get("panorama_id"),
+        "x_axis": payload.get("x_axis"),
+        "y_axis": payload.get("y_axis"),
+        "user_x": payload.get("user_x"),
+        "user_y": payload.get("user_y"),
+        "click_pixel_xy": payload.get("click_pixel_xy"),
+        "captured_at": now_ts,
+        "click_pixel_source": "debug_anchor_mode",
+    }
+    if existing_idx is not None:
+        captured[existing_idx] = anchor_entry
+    else:
+        captured.append(anchor_entry)
+
+    ANCHOR_POINTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ANCHOR_POINTS_PATH.write_text(
+        json.dumps(captured, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    # 2) 更新 scene_catalog.demo_anchors.local.json
+    demo: List[Dict[str, Any]] = []
+    if ANCHOR_CATALOG_PATH.exists():
+        try:
+            demo = read_json(ANCHOR_CATALOG_PATH)
+            if not isinstance(demo, list):
+                demo = []
+        except Exception:
+            demo = []
+
+    demo_idx = None
+    for i, s in enumerate(demo):
+        if str(s.get("scene_name") or "").strip() == scene_name:
+            demo_idx = i
+            break
+
+    demo_entry = {
+        "scene_name": scene_name,
+        "scene_title": payload.get("scene_title", ""),
+        "pano_stub": payload.get("pano_stub", ""),
+        "season_hint": payload.get("season_hint", ""),
+        "preview_url": payload.get("preview_url", ""),
+        "panorama_id": payload.get("panorama_id"),
+        "tile_size": payload.get("tile_size", 512),
+        "tiled_widths_desc": payload.get("tiled_widths_desc", []),
+        "scene_id": payload.get("scene_id"),
+        "panorama_name": payload.get("panorama_name", ""),
+        "scene_group_name": payload.get("scene_group_name", ""),
+        "coordinate": payload.get("coordinate", ""),
+        "x_axis": payload.get("x_axis"),
+        "y_axis": payload.get("y_axis"),
+        "seasons": payload.get("seasons", []),
+        "user_x": payload.get("user_x"),
+        "user_y": payload.get("user_y"),
+        "click_pixel_xy": payload.get("click_pixel_xy"),
+        "anchor_captured_at": now_ts,
+    }
+    if demo_idx is not None:
+        demo[demo_idx] = demo_entry
+    else:
+        demo.append(demo_entry)
+
+    ANCHOR_CATALOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ANCHOR_CATALOG_PATH.write_text(
+        json.dumps(demo, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return {
+        "ok": True,
+        "scene_name": scene_name,
+        "captured_at": now_ts,
+        "anchored_total": len(captured),
+        "demo_catalog_total": len(demo),
+    }
+
+
 class AppHandler(BaseHTTPRequestHandler):
     server_version = "ForbiddenCityMVP/0.1"
 
@@ -915,6 +1097,18 @@ class AppHandler(BaseHTTPRequestHandler):
 
         if pathname == "/api/debug/mapping":
             return self._send_json(HTTPStatus.OK, get_mapping_payload())
+
+        if pathname == "/api/debug/scenes":
+            try:
+                scenes = _load_phase0_scenes_with_anchor_status()
+                return self._send_json(HTTPStatus.OK, {
+                    "total": len(scenes),
+                    "items": scenes,
+                    "anchored_count": sum(1 for s in scenes if s.get("has_anchor")),
+                    "unanchored_count": sum(1 for s in scenes if not s.get("has_anchor")),
+                })
+            except Exception as exc:
+                return self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
         if pathname == "/api/map/stats":
             return self._send_json(
@@ -1016,6 +1210,18 @@ class AppHandler(BaseHTTPRequestHandler):
         if pathname.startswith("/api/scenes/"):
             scene_name = pathname.removeprefix("/api/scenes/")
             scene = STATE["by_name"].get(scene_name)
+            if not scene:
+                # 回退到 phase0 catalog（锚点采集模式可能需要标注未入库场景）
+                if PHASE0_CATALOG_PATH.exists():
+                    try:
+                        phase0 = read_json(PHASE0_CATALOG_PATH)
+                        if isinstance(phase0, list):
+                            for row in phase0:
+                                if str(row.get("scene_name") or "") == scene_name:
+                                    scene = build_scene_record(row, INVENTORY)
+                                    break
+                    except Exception:
+                        pass
             if not scene:
                 return self._send_json(HTTPStatus.NOT_FOUND, {"error": "scene_not_found", "scene_name": scene_name})
             append_viewer_manifest_log(scene_name, scene)
@@ -1163,6 +1369,21 @@ class AppHandler(BaseHTTPRequestHandler):
                 return self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(err)})
             except json.JSONDecodeError:
                 return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_json"})
+
+        if pathname == "/api/debug/anchor":
+            try:
+                payload = self._read_json_body()
+                result = _save_anchor_point(payload)
+                # 重新加载 STATE 使新锚点生效
+                global STATE
+                STATE = load_state()
+                return self._send_json(HTTPStatus.OK, result)
+            except ValueError as err:
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(err)})
+            except json.JSONDecodeError:
+                return self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_json"})
+            except Exception as exc:
+                return self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found", "path": pathname})
 

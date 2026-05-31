@@ -11,14 +11,18 @@
     <div class="shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">寻迹故宫</p>
-          <h1>故宫一景</h1>
+          <p class="eyebrow">Tracing the Forbidden City</p>
+          <h1>寻迹故宫</h1>
           <p class="subtitle">观察全景，在地图上标出你的位置。</p>
         </div>
         <div class="hero-stats" id="hero-stats">
           <div class="stat-card">
             <span>可玩场景</span>
             <strong id="scene-count">-</strong>
+          </div>
+          <div class="stat-card">
+            <span>已玩</span>
+            <strong id="played-count">0</strong>
           </div>
           <div class="stat-card">
             <span>版本</span>
@@ -118,6 +122,18 @@
 
     <div id="perfect-toast" class="perfect-toast" style="display:none"><span class="perfect-banner">满分定位 · 5000</span></div>
     <div id="confetti-container" class="perfect-confetti" style="display:none"></div>
+
+    <!-- 锚点采集模式面板 -->
+    <div class="debug-anchor-bar" id="debug-anchor-bar" style="display:none">
+      <span class="debug-badge">🎯 锚点采集模式</span>
+      <select id="debug-scene-select" class="debug-scene-select">
+        <option value="">-- 选择场景 --</option>
+      </select>
+      <span class="debug-status" id="debug-anchor-status">--</span>
+      <button id="debug-reload-btn" class="btn-small" type="button">刷新列表</button>
+      <span class="debug-stats" id="debug-anchor-stats"></span>
+    </div>
+
     <div class="settings-fab" id="settings-fab" title="设置">⚙</div>
     <div class="settings-panel" id="settings-panel" style="display:none">
       <h3>资源管理</h3>

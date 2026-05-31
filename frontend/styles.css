@@ -602,3 +602,103 @@ body.is-report-mode .report-figure-nav { display: flex; }
     flex-direction: column;
   }
 }
+
+/* ---- 锚点采集模式 ---- */
+.debug-anchor-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 999;
+  background: rgba(15, 23, 42, 0.95);
+  border-bottom: 2px solid var(--accent);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  backdrop-filter: blur(12px);
+}
+.debug-badge {
+  font-weight: 700;
+  color: var(--accent-strong);
+  font-size: 14px;
+  white-space: nowrap;
+  background: var(--chip);
+  padding: 4px 12px;
+  border-radius: 6px;
+}
+.debug-scene-select {
+  flex: 1;
+  min-width: 200px;
+  max-width: 420px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+.debug-scene-select optgroup {
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--bg);
+}
+.debug-scene-select option {
+  background: var(--bg-soft);
+  color: var(--text);
+  padding: 4px 0;
+}
+.debug-status {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+.debug-status.has-anchor {
+  color: #22c55e;
+  background: rgba(34,197,94,0.1);
+}
+.debug-status.no-anchor {
+  color: #f59e0b;
+  background: rgba(245,158,11,0.1);
+}
+.debug-stats {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.btn-small {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background 0.2s;
+}
+.btn-small:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+/* 锚点采集模式的锚点标记 */
+.anchor-debug-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f59e0b;
+  border: 3px solid #fbbf24;
+  box-shadow: 0 0 12px rgba(245,158,11,0.7);
+}
+
+/* debug 模式下给 body 留出顶栏空间 */
+body.is-debug-anchors .shell {
+  padding-top: 56px;
+}
+body.is-debug-anchors .hero {
+  padding-top: 10px;
+}

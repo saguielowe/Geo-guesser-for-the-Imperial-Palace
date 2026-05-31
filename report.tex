@@ -41,16 +41,16 @@
 \title{\textbf{寻迹故宫}\\[0.4em]
   \large 基于故宫数字全景的 GeoGuessr 风格定位游戏}
 \author{%
-  姓名：\underline{\hspace{3cm}} \quad
-  学号：\underline{\hspace{3cm}}\\[0.3em]
-  课程：\underline{\hspace{4cm}} \quad
-  日期：2026 年 5 月
+  姓名：李子嘉 \quad
+  学号：2024012325 \\[0.3em]
+  课程：故宫学 \quad
+  日期：2026 年 6 月
 }
 \date{}
 \begin{document}
 \maketitle
 \begin{abstract}
-  本项目「寻迹故宫」（Tracing the Forbidden City）在故宫官方数字全景资源（\url{https://pano.dpm.org.cn/}）基础上，实现了一款 GeoGuessr 风格的 Web 定位游戏：玩家观察 360° 全景，在离线故宫平面图上点击猜测位置，系统按误差计分并展示建筑知识。针对官方坐标与本地宫图瓦片不完全一致的问题，我们采集 34 个场景锚点，采用全局及分 panorama 仿射变换校正真值；前端集成 krpano 全景浏览与 Leaflet 宫图交互，后端 Python 提供静态资源与按需下载管理。当前版本 \textbf{1.0} 支持 34 个已锚点场景、季节/建筑问答、本地资源懒加载与报告演示模式。本文介绍项目背景、系统设计、坐标标定方法、主要功能与体验评估，并讨论局限与后续工作。
+  本项目「寻迹故宫」（Tracing the Forbidden City）在故宫官方数字全景资源（\url{https://pano.dpm.org.cn/}）基础上，实现了一款 GeoGuessr 风格的 Web 定位游戏：玩家观察 360° 全景，在离线故宫平面图上点击猜测位置，系统按误差计分并展示建筑知识。针对官方坐标与本地宫图瓦片不完全一致的问题，我们采集 24 个场景锚点，采用全局及分 panorama 仿射变换校正真值；前端集成 krpano 全景浏览与 Leaflet 宫图交互，后端 Python 提供静态资源与按需下载管理。当前版本 \textbf{1.0} 支持 24 个已锚点场景、季节/建筑问答、本地资源懒加载与报告演示模式。本文介绍项目背景、系统设计、坐标标定方法、主要功能与体验评估，并讨论局限与后续工作。
   \vspace{0.5em}
   \noindent\textbf{关键词：}数字文化遗产；全景浏览；地图定位；仿射标定；教育游戏
 \end{abstract}
@@ -70,7 +70,7 @@
 \end{enumerate}
 \subsection{扩展目标（1.0 已实现）}
 \begin{itemize}[nosep]
-  \item \textbf{34 景锚点题库}：覆盖前三殿、箭亭、神武门、御花园等代表区域；
+  \item \textbf{24 景锚点题库}：覆盖前三殿、箭亭、神武门、御花园、宁寿宫花园等代表区域；
   \item \textbf{季节小问}与\textbf{建筑知识问答}，答对额外加分；
   \item \textbf{本地资源管理}：懒下载、磁盘占用统计、按容量/题数清理；
   \item \textbf{报告演示模式}（\texttt{?report=1}）：隐藏开发向 UI，便于截图与答辩；
@@ -119,7 +119,7 @@
   \item \textbf{manual9}：早期 9 点粗标；
   \item \textbf{captured}：调试模式（\texttt{?debug=anchors}）下逐 scene 点击落库，精度更高。
 \end{itemize}
-合并后共 \textbf{34} 个锚点（captured 优先去重）。标定脚本 \texttt{calibrate\_map\_transform.py} / \texttt{analyze\_per\_pano\_anchors.py} 拟合：
+合并后共 \textbf{24} 个锚点（captured 优先去重）。标定脚本 \texttt{calibrate\_map\_transform.py} / \texttt{analyze\_per\_pano\_anchors.py} 拟合：
 \begin{itemize}[nosep]
   \item \textbf{全局 6 参 affine}：作为 fallback；
   \item \textbf{per-panorama affine}：样本数 $n\ge 3$ 的分区变换，显著降低前三殿、御花园等区域的像素误差。
@@ -179,7 +179,7 @@
   \label{fig:perfect}
 \end{figure}
 \subsection{知识问答}
-\texttt{scene\_knowledge.json} 为 34 个场景提供问答题与解析文案；提交定位后展示与当前建筑相关的选择题。图~\ref{fig:quiz} 为季节与建筑问答示例。
+\texttt{scene\_knowledge.json} 为 24 个场景提供问答题与解析文案；提交定位后展示与当前建筑相关的选择题。图~\ref{fig:quiz} 为季节与建筑问答示例。
 \begin{figure}[htbp]
   \centering
   \begin{subfigure}[t]{0.48\linewidth}
@@ -197,7 +197,7 @@
   \label{fig:quiz}
 \end{figure}
 \subsection{本地资源管理}
-全库 34 景全景瓦片合计约 667\,MB，宫图及静态资源约 52\,MB（设置面板将宫图并入「其它」展示，因无宫图无法游戏）。用户可通过右下角「设置」面板查看占用、设置磁盘预算、触发预下载或按 MB / 场景数清理缓存；清理时保护已锚点场景。
+全库 24 景全景瓦片（仅 l3 最高细节层级）合计约 172\,MB，宫图及静态资源约 52\,MB（设置面板将宫图并入「其它」展示，因无宫图无法游戏）。用户可通过右下角「设置」面板查看占用、设置磁盘预算、触发预下载或按 MB / 场景数清理缓存；清理时保护已锚点场景。
 \begin{figure}[htbp]
   \centering
   \figplaceholder[width=0.55\linewidth]{T2_settings_storage.png}
@@ -217,7 +217,7 @@ start_server.bat    # Windows
 \section{测试与体验}
 \subsection{功能测试}
 \begin{itemize}[nosep]
-  \item 34 个 catalog 场景在本地瓦片齐全时可正常加载全景与宫图；
+  \item 24 个 catalog 场景在本地瓦片齐全时可正常加载全景与宫图；
   \item 提交后真值标记、连线、计分与问答流程完整；
   \item 随机 / 下一题不会进入未下载场景；
   \item 锚点验证模式下真值点与 captured 记录一致。
@@ -228,12 +228,12 @@ start_server.bat    # Windows
 早期版本在每次页面加载时扫描 \texttt{data/raw} 统计占用，导致约 5\,s 延迟；现改为打开设置面板时按需刷新并缓存 120\,s，首屏加载恢复至秒级。
 \section{总结与展望}
 \subsection{工作总结}
-本项目完成了从官方数字全景到可玩定位游戏的迁移：集成 krpano 与 Leaflet，建立 34 点锚点与分 panorama 仿射标定 pipeline，实现计分、问答、资源管理与报告演示模式，版本 \textbf{1.0} 可用于课程答辩与交付。
+本项目完成了从官方数字全景到可玩定位游戏的迁移：集成 krpano 与 Leaflet，建立 24 点锚点与分 panorama 仿射标定 pipeline，实现计分、问答、资源管理与报告演示模式，版本 \textbf{1.0} 可用于课程答辩与交付。
 \subsection{局限}
 \begin{itemize}[nosep]
   \item 官方坐标与本地宫图仍存在分区系统误差，依赖持续锚点采集；
   \item 前端为 Vanilla JS 而非需求文档初拟的 React，便于快速迭代但组件化不足；
-  \item 34 景全量瓦片体积大，教师机交付需精选子集或懒下载；
+  \item 24 景全量瓦片体积约 172\,MB，教师机交付已可整体打包；如需扩展更多场景，懒下载机制可按需获取。
   \item 季节题在题库夏季占比较高，季节问答出现概率已做平衡但仍偏随机。
 \end{itemize}
 \subsection{后续工作}
