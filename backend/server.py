@@ -815,13 +815,15 @@ def load_state() -> Dict[str, Any]:
     }
 
     by_name = {scene["scene_name"]: scene for scene in scenes if scene.get("scene_name")}
-    playable = [s for s in scenes if (s.get("local_tile_count") or 0) > 0]
+    real_scenes = [s for s in scenes if s.get("scene_name") != "scene_debug_tiles"]
+    playable = [s for s in real_scenes if (s.get("local_tile_count") or 0) > 0]
     return {
         "scenes": scenes,
         "by_name": by_name,
         "bounds": bounds,
         "inventory_count": len(inventory),
         "playable_count": len(playable),
+        "real_scene_count": len(real_scenes),
         "catalog_source": catalog_source,
     }
 
@@ -870,6 +872,8 @@ def _load_phase0_scenes_with_anchor_status() -> List[Dict[str, Any]]:
         name = str(row.get("scene_name") or "").strip()
         if not stub or stub not in local_set:
             continue
+        if name == "scene_debug_tiles":
+            continue  # 调试网格不对外展示
         result.append({
             "scene_name": name,
             "scene_title": row.get("scene_title", ""),
@@ -1069,7 +1073,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "status": "ok",
-                    "scene_count": len(STATE["scenes"]),
+                    "scene_count": STATE["real_scene_count"],
                     "inventory_count": STATE["inventory_count"],
                     "playable_count": STATE["playable_count"],
                     "catalog_source": STATE["catalog_source"],
@@ -1085,7 +1089,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "bounds": STATE["bounds"],
-                    "scene_count": len(STATE["scenes"]),
+                    "scene_count": STATE["real_scene_count"],
                     "inventory_count": STATE["inventory_count"],
                     "playable_count": STATE["playable_count"],
                     "catalog_source": STATE["catalog_source"],
@@ -1115,7 +1119,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "bounds": STATE["bounds"],
-                    "scene_count": len(STATE["scenes"]),
+                    "scene_count": STATE["real_scene_count"],
                 },
             )
 
@@ -1134,7 +1138,7 @@ class AppHandler(BaseHTTPRequestHandler):
             unplayed_local = local_names - played
             payload: Dict[str, Any] = {
                 "playable_count": STATE["playable_count"],
-                "total_scenes": len(STATE["scenes"]),
+                "total_scenes": STATE["real_scene_count"],
                 "catalog_source": STATE["catalog_source"],
                 "download_queue": _queue.status(),
                 "played_count": len(played),
@@ -1185,7 +1189,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if pathname == "/api/scenes":
             params = parse_qs(parsed.query)
             limit = params.get("limit", [None])[0]
-            items = STATE["scenes"]
+            items = [s for s in STATE["scenes"] if s.get("scene_name") != "scene_debug_tiles"]
             if limit:
                 try:
                     limit_value = max(1, int(limit))
@@ -1195,7 +1199,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return self._send_json(
                 HTTPStatus.OK,
                 {
-                    "total": len(STATE["scenes"]),
+                    "total": len(items),
                     "items": items,
                 },
             )

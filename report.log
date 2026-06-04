@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999997 (TeX Live 2025) (preloaded format=xelatex 2025.5.20)  3 JUN 2026 22:32
+This is XeTeX, Version 3.141592653-2.6-0.999997 (TeX Live 2025) (preloaded format=xelatex 2025.5.20)  4 JUN 2026 23:34
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -664,11 +664,6 @@ Overfull \hbox (17.48817pt too wide) in paragraph at lines 95--109
 LaTeX Font Info:    Font shape `TU/SimSun(0)/m/sl' in size <12> not available
 (Font)              Font shape `TU/SimSun(0)/m/it' tried instead on input line 114.
 [2]
-Overfull \hbox (48.82217pt too wide) in paragraph at lines 123--124
-\TU/SimSun(0)/m/n/12 合 并 后 共 \TU/lmr/bx/n/12 39 \TU/SimSun(0)/m/n/12 个 锚 点  |（\TU/lmr/m/n/12 captured \TU/SimSun(0)/m/n/12 优 先 去 重） ，|  覆 盖 \TU/lmr/m/n/12 11 \TU/SimSun(0)/m/n/12 个 区 域。|  标 定 脚 本 \TU/lmtt/m/n/12 calibrate_map_transform.py
- []
-
-
 
 [3]
 
@@ -687,14 +682,21 @@ Overfull \hbox (48.82217pt too wide) in paragraph at lines 123--124
 LaTeX2e <2024-11-01> patch level 2
 L3 programming layer <2022/08/05>
  ***********
-Package rerunfilecheck Info: File `report.out' has not changed.
-(rerunfilecheck)             Checksum: 9CE9E9839D15710D0D049FD5E749394D;2836.
+
+
+Package rerunfilecheck Warning: File `report.out' has changed.
+(rerunfilecheck)                Rerun to get outlines right
+(rerunfilecheck)                or use package `bookmark'.
+
+Package rerunfilecheck Info: Checksums for `report.out':
+(rerunfilecheck)             Before: 9CE9E9839D15710D0D049FD5E749394D;2836
+(rerunfilecheck)             After:  0998DC45C0C8D4817AE2855CE1B5AFFA;2770.
  ) 
 Here is how much of TeX's memory you used:
- 19232 strings out of 470231
- 419100 string characters out of 5487678
- 829073 words of memory out of 5000000
- 45647 multiletter control sequences out of 15000+600000
+ 19265 strings out of 470231
+ 421113 string characters out of 5487678
+ 828073 words of memory out of 5000000
+ 45680 multiletter control sequences out of 15000+600000
  635053 words of font info for 103 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
  93i,11n,111p,548b,988s stack positions out of 10000i,1000n,20000p,200000b,200000s

@@ -552,6 +552,18 @@ function submitGuess() {
   var distance = Math.hypot(gx - tx, gy - ty);
   var score = scoreByDistance(distance);
 
+  // 提交后在默认模式下也显示真值点（绿点），连线反馈
+  if (!state.truthMarker) {
+    var truthPixel = applyCoordToMapPixel(tx, ty);
+    if (truthPixel) {
+      var truthLatLng = state.map.unproject([truthPixel.px, truthPixel.py], MAP_MAX_ZOOM);
+      state.truthMarker = window.L.marker(truthLatLng, {
+        icon: createDotIcon("truth-dot"),
+        title: "场景真值点",
+      }).addTo(state.map);
+    }
+  }
+
   // 绘制连线（用 truthMarker 的最新位置）
   if (state.truthMarker && state.guessMarker) {
     if (state.guessLine) state.guessLine.remove();
@@ -640,6 +652,7 @@ function showKnowledgeQuiz() {
 
   if (dom.knowledgeQuiz) dom.knowledgeQuiz.style.display = "block";
   if (dom.quizZone) dom.quizZone.style.display = "block";
+  if (dom.knowledgeFact) dom.knowledgeFact.style.display = "none";
   if (dom.knowledgeQuestion) dom.knowledgeQuestion.textContent = "这是哪个建筑？";
   if (dom.knowledgeOptions) {
     dom.knowledgeOptions.innerHTML = "";
@@ -651,7 +664,6 @@ function showKnowledgeQuiz() {
         dom.knowledgeOptions.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
         if (!isCorrect) {
           btn.classList.add("is-wrong");
-          // 标出正确答案
           dom.knowledgeOptions.querySelectorAll("button").forEach(function (b) {
             if (b.textContent === correct) b.classList.add("is-correct");
           });
@@ -659,7 +671,54 @@ function showKnowledgeQuiz() {
           btn.classList.add("is-correct");
           state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI();
         }
-        // 保留显示，不隐藏
+        // 接知识问答
+        setTimeout(function () { showKnowledgeFact(); }, 1200);
+      });
+      dom.knowledgeOptions.appendChild(btn);
+    });
+  }
+}
+
+function showKnowledgeFact() {
+  var scene = state.currentScene;
+  if (!scene) return;
+  var knowledgeEntry = null;
+  for (var i = 0; i < state.knowledgeData.length; i++) {
+    if (state.knowledgeData[i].scene_name === scene.scene_name) {
+      knowledgeEntry = state.knowledgeData[i];
+      break;
+    }
+  }
+  if (!knowledgeEntry) return;
+
+  if (dom.knowledgeQuiz) dom.knowledgeQuiz.style.display = "block";
+  if (dom.quizZone) dom.quizZone.style.display = "block";
+  if (dom.knowledgeFact) dom.knowledgeFact.style.display = "none";
+  if (dom.knowledgeQuestion) dom.knowledgeQuestion.textContent = "📚 " + knowledgeEntry.question;
+  if (dom.knowledgeOptions) {
+    dom.knowledgeOptions.innerHTML = "";
+    var opts = knowledgeEntry.options.slice();
+    opts.sort(function () { return Math.random() - 0.5; });
+    opts.forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.textContent = opt;
+      btn.addEventListener("click", function () {
+        var isCorrect = opt === knowledgeEntry.answer;
+        dom.knowledgeOptions.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+        if (!isCorrect) {
+          btn.classList.add("is-wrong");
+          dom.knowledgeOptions.querySelectorAll("button").forEach(function (b) {
+            if (b.textContent === knowledgeEntry.answer) b.classList.add("is-correct");
+          });
+        } else {
+          btn.classList.add("is-correct");
+          state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI();
+        }
+        // 展示知识解析于下方
+        if (dom.knowledgeFact) {
+          dom.knowledgeFact.textContent = "💡 " + knowledgeEntry.fact;
+          dom.knowledgeFact.style.display = "block";
+        }
       });
       dom.knowledgeOptions.appendChild(btn);
     });
@@ -773,6 +832,12 @@ function installMiniMap() {
 
 function renderMapForScene(scene) {
   if (!state.map) {
+    return;
+  }
+  // 默认模式不显示绿点（真值），仅在 debug 或 report 模式下显示
+  if (!state.isDebugAnchors && !state.isReport) {
+    if (state.truthMarker) { state.truthMarker.remove(); state.truthMarker = null; }
+    if (state.guessLine) { state.guessLine.remove(); state.guessLine = null; }
     return;
   }
   var truth = getSceneTruthCoord(scene);
@@ -1191,16 +1256,14 @@ async function init() {
     });
   }
 
-  // 初始场景
-  var startScene = config.default_scene_name;
+  // 初始场景 — 报告模式用指定 scene，普通/debug 模式随机
   if (state.isReport && figureIdx >= 1 && figureIdx <= 6) {
     var title = REPORT_SCENES[figureIdx - 1];
     var found = state.scenes.find(function (s) { return (s.scene_title || s.scene_name) === title; });
-    if (found) startScene = found.scene_name;
-  }
-  if (startScene) {
-    await loadScene(startScene);
-    if (state.currentScene) playedScenes[state.currentScene.scene_name] = true;
+    if (found) {
+      await loadScene(found.scene_name);
+      if (state.currentScene) playedScenes[state.currentScene.scene_name] = true;
+    }
   } else if (state.scenes.length > 0) {
     await loadNextScene();
     if (state.currentScene) playedScenes[state.currentScene.scene_name] = true;
