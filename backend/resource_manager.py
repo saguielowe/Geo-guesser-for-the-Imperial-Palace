@@ -308,6 +308,10 @@ class DownloadQueue:
                 "completed": len(self._completed),
                 "failed": len(self._failed),
                 "queue": list(self._queue),
+                "failed_items": [
+                    {"scene_name": name, "reason": reason}
+                    for name, reason in self._failed[-5:]  # 最近 5 条
+                ],
                 "progress": dict(self._progress),
             }
 
@@ -347,15 +351,73 @@ class DownloadQueue:
         script = ROOT / "scripts" / "download_from_catalog.py"
         if not script.exists():
             raise FileNotFoundError(f"下载脚本不存在: {script}")
-        result = subprocess.run(
-            [sys.executable, str(script), "--scene", scene_name],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            cwd=str(ROOT),
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")
+
+        # 从 catalog 中找到场景行
+        scene_row = None
+        for row in catalog:
+            if str(row.get("scene_name") or "") == scene_name:
+                scene_row = row
+                break
+        if scene_row is None:
+            raise ValueError(f"场景 {scene_name} 不在 catalog 中，无法下载")
+
+        # 检查磁盘空间（至少 100 MB 余量）
+        try:
+            check_dir = PANORAMAS_DIR if PANORAMAS_DIR.exists() else DATA_DIR
+            usage = shutil.disk_usage(str(check_dir))
+            free_mb = usage.free / (1024 * 1024)
+            if free_mb < 100:
+                raise OSError(f"磁盘空间不足：仅剩 {free_mb:.0f} MB（需要至少 100 MB）")
+        except OSError:
+            raise  # 磁盘空间不足，直接抛出
+        except Exception:
+            pass  # disk_usage 偶发失败（如权限）不阻塞下载
+
+        # 创建临时 catalog 文件（只含该场景）
+        tmp_path = PROCESSED_DIR / f"_tmp_download_{scene_name}.json"
+        try:
+            tmp_path.write_text(
+                json.dumps([scene_row], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            # 带指数退避重试（最多 3 次）
+            max_retries = 3
+            last_error = ""
+            for attempt in range(max_retries):
+                try:
+                    result = subprocess.run(
+                        [
+                            sys.executable, str(script),
+                            "--catalog", str(tmp_path),
+                            "--levels", "l3",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=600,
+                        cwd=str(ROOT),
+                    )
+                    if result.returncode == 0:
+                        return  # 成功
+                    last_error = (
+                        result.stderr.strip()
+                        or result.stdout.strip()
+                        or f"exit {result.returncode}"
+                    )
+                except subprocess.TimeoutExpired:
+                    last_error = f"下载超时（第 {attempt + 1}/{max_retries} 次）"
+                except Exception as exc:
+                    last_error = str(exc)
+
+                if attempt < max_retries - 1:
+                    time.sleep(2 * (attempt + 1))  # 2s, 4s 退避
+
+            raise RuntimeError(last_error or "下载失败（已达最大重试次数）")
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 # ---- 场景播放记录 ----

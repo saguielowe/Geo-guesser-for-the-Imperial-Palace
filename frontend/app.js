@@ -1286,6 +1286,35 @@ async function refreshUsage() {
       el("stat-playable", (data.unplayed_local_count || 0) + " / " + (data.playable_count || 0));
       el("stat-played", String(data.played_count || 0));
     }
+
+    // 显示下载队列状态
+    var q = data.download_queue;
+    var queueDiv = document.getElementById("settings-queue");
+    var statusDiv = document.getElementById("queue-status");
+    var errorsDiv = document.getElementById("queue-errors");
+    if (queueDiv && statusDiv && q && (q.active || q.queued > 0 || q.failed > 0)) {
+      queueDiv.style.display = "block";
+      var parts = [];
+      if (q.active && q.current) parts.push("正在下载: " + q.current);
+      if (q.queued > 0) parts.push("排队: " + q.queued + " 景");
+      if (q.completed > 0) parts.push("已完成: " + q.completed + " 景");
+      statusDiv.textContent = parts.join(" | ") || "--";
+
+      if (errorsDiv && q.failed_items && q.failed_items.length > 0) {
+        errorsDiv.innerHTML = "";
+        q.failed_items.forEach(function (f) {
+          var p = document.createElement("p");
+          p.style.cssText = "color:#fca5a5;font-size:12px;margin:2px 0;";
+          p.textContent = "✗ " + f.scene_name + ": " + f.reason;
+          errorsDiv.appendChild(p);
+        });
+      } else if (errorsDiv) {
+        errorsDiv.innerHTML = "";
+      }
+    } else if (queueDiv) {
+      queueDiv.style.display = "none";
+    }
+
     // 同步下载模式
     var cfg = await requestJson("/api/resources/config");
     var sel = document.getElementById("download-mode-select");
