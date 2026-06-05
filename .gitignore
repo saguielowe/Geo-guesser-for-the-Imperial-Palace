@@ -4,8 +4,10 @@ __pycache__/
 *.pyc
 *.jpg
 *.png
-electron/node_modules/
-electron/dist/
+node_modules/
+dist/
 _six_*.json
 _search_result.json
 _title_*.txt
+build/
+backend/server/

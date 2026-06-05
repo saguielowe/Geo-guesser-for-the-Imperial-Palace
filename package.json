@@ -1,0 +1,60 @@
+{
+  "name": "tracing-forbidden-city",
+  "version": "1.0.0",
+  "description": "寻迹故宫 — 基于故宫数字全景的 GeoGuessr 风格定位游戏",
+  "main": "electron/main.js",
+  "author": "Zijia Li",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.forbiddencity.tracing",
+    "productName": "寻迹故宫",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "frontend/**/*",
+      "backend/server/**/*",
+      "data/raw/leaflet/**/*",
+      "data/raw/vendor/**/*",
+      "data/raw/project_tour.xml",
+      "data/raw/map_transform.json",
+      "data/processed/scene_catalog.demo_anchors.local.json",
+      "data/processed/map_anchor_points.captured.json",
+      "data/processed/scene_knowledge.json",
+      "data/processed/local_tiles_inventory.json",
+      "data/processed/resource_config.json",
+      "data/raw/panoramas/20/tiles/1_summer/**/*",
+      "data/raw/panoramas/20/tiles/2_summer/**/*",
+      "data/raw/panoramas/20/tiles/26_summer/**/*",
+      "data/raw/panoramas/20/tiles/1682_summer/**/*",
+      "data/raw/panoramas/20/tiles/2795_summer/**/*",
+      "data/raw/panoramas/40/tiles/2811_winter/**/*",
+      "data/raw/panoramas/61/tiles/3234_spring/**/*",
+      "data/raw/panoramas/61/tiles/3240_summer/**/*",
+      "data/raw/panoramas/63/tiles/3299_summer/**/*",
+      "data/raw/panoramas/63/tiles/3703_spring/**/*"
+    ],
+    "asar": false,
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "language": "2052"
+    },
+    "mac": {
+      "target": "dmg"
+    }
+  }
+}

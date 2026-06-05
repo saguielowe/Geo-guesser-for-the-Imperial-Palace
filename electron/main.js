@@ -2,9 +2,9 @@ const { app, BrowserWindow } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const http = require("http");
+const fs = require("fs");
 
 const ROOT = path.resolve(__dirname, "..");
-const PYTHON = process.platform === "win32" ? "python" : "python3";
 const SERVER_PORT = 8000;
 const SERVER_URL = `http://127.0.0.1:${SERVER_PORT}`;
 
@@ -12,9 +12,30 @@ let backendProcess = null;
 
 function startBackend() {
   return new Promise((resolve, reject) => {
-    const serverScript = path.join(ROOT, "backend", "server.py");
-    backendProcess = spawn(PYTHON, [serverScript], {
-      cwd: ROOT,
+    const isDev = !app.isPackaged;
+
+    let cmd, cwd;
+
+    if (isDev) {
+      // 开发模式：用系统 Python 直接跑
+      const python = process.platform === "win32" ? "python" : "python3";
+      cmd = python;
+      cwd = ROOT;
+    } else {
+      // 生产模式：exe 在 resources/app/backend/server/server.exe
+      const exeName = process.platform === "win32" ? "server.exe" : "server";
+      const exePath = path.join(process.resourcesPath, "app", "backend", "server", exeName);
+      if (!fs.existsSync(exePath)) {
+        reject(new Error(`Backend executable not found: ${exePath}`));
+        return;
+      }
+      cmd = exePath;
+      cwd = process.resourcesPath;
+    }
+
+    const args = isDev ? [path.join(ROOT, "backend", "server.py")] : [];
+    backendProcess = spawn(cmd, args, {
+      cwd: cwd,
       stdio: ["ignore", "pipe", "pipe"],
     });
 

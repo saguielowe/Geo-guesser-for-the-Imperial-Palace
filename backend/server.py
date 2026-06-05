@@ -16,7 +16,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 
-ROOT = Path(__file__).resolve().parents[1]
+# PyInstaller 打包后 __file__ 不可用；沿 exe 目录向上查找 data/ 定位 ROOT
+if getattr(sys, "frozen", False):
+    _cur = Path(sys.executable).resolve().parent
+    ROOT = _cur
+    while ROOT != ROOT.parent:
+        if (ROOT / "data").is_dir():
+            break
+        ROOT = ROOT.parent
+else:
+    ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
