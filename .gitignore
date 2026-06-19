@@ -11,3 +11,7 @@ _search_result.json
 _title_*.txt
 build/
 backend/server/
+.aux
+.log
+.out
+.synctex.gz

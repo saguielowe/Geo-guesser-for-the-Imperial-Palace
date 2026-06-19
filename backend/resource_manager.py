@@ -13,7 +13,18 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-ROOT = Path(__file__).resolve().parents[1]
+# PyInstaller frozen 兼容：沿目录向上查找 data/ 定位 ROOT
+if getattr(sys, "frozen", False):
+    _cur = Path(sys.executable).resolve().parent
+    ROOT = _cur
+    while ROOT != ROOT.parent:
+        if (ROOT / "data").is_dir():
+            break
+        ROOT = ROOT.parent
+else:
+    ROOT = Path(__file__).resolve().parents[1]
+
+
 DATA_DIR = ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
@@ -23,6 +34,7 @@ LEAFLET_DIR = RAW_DIR / "leaflet"
 ANCHOR_CATALOG_PATH = PROCESSED_DIR / "scene_catalog.demo_anchors.local.json"
 KNOWLEDGE_PATH = PROCESSED_DIR / "scene_knowledge.json"
 ANCHOR_POINTS_PATH = PROCESSED_DIR / "map_anchor_points.captured.json"
+INVENTORY_PATH = PROCESSED_DIR / "local_tiles_inventory.json"
 
 # ---- 缓存 ----
 _cache_lock = threading.Lock()
@@ -347,11 +359,7 @@ class DownloadQueue:
         thread.start()
 
     def _download_scene(self, scene_name: str, catalog: List[Dict[str, Any]]) -> None:
-        """调用现有下载脚本下载单个场景。"""
-        script = ROOT / "scripts" / "download_from_catalog.py"
-        if not script.exists():
-            raise FileNotFoundError(f"下载脚本不存在: {script}")
-
+        """内联下载逻辑，零外部脚本依赖。"""
         # 从 catalog 中找到场景行
         scene_row = None
         for row in catalog:
@@ -369,55 +377,93 @@ class DownloadQueue:
             if free_mb < 100:
                 raise OSError(f"磁盘空间不足：仅剩 {free_mb:.0f} MB（需要至少 100 MB）")
         except OSError:
-            raise  # 磁盘空间不足，直接抛出
+            raise
         except Exception:
-            pass  # disk_usage 偶发失败（如权限）不阻塞下载
+            pass
 
-        # 创建临时 catalog 文件（只含该场景）
-        tmp_path = PROCESSED_DIR / f"_tmp_download_{scene_name}.json"
-        try:
-            tmp_path.write_text(
-                json.dumps([scene_row], ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+        # 直接下载瓦片到本地 tiles/ 结构（不走 iter_tile_urls 的 krpano 路径）
+        pid = scene_row.get("panorama_id")
+        stub = scene_row.get("pano_stub")
+        tile_size = int(scene_row.get("tile_size") or 512)
+        widths_desc = scene_row.get("tiled_widths_desc") or [5184, 2624, 1280, 640]
+        import math as _math
+        width = max(widths_desc) if widths_desc else 5184
+        tiles_per_axis = max(1, _math.ceil(width / tile_size))
+        faces = ["f", "b", "l", "r", "u", "d"]
+        base_url = f"https://pano.dpm.org.cn/panoramas/{pid}/krpano/panos/{stub}.tiles"
+        out_dir = PANORAMAS_DIR / str(pid) / "tiles" / str(stub)
 
-            # 带指数退避重试（最多 3 次）
-            max_retries = 3
-            last_error = ""
-            for attempt in range(max_retries):
-                try:
-                    result = subprocess.run(
-                        [
-                            sys.executable, str(script),
-                            "--catalog", str(tmp_path),
-                            "--levels", "l3",
-                        ],
-                        capture_output=True,
-                        text=True,
-                        timeout=600,
-                        cwd=str(ROOT),
-                    )
-                    if result.returncode == 0:
-                        return  # 成功
-                    last_error = (
-                        result.stderr.strip()
-                        or result.stdout.strip()
-                        or f"exit {result.returncode}"
-                    )
-                except subprocess.TimeoutExpired:
-                    last_error = f"下载超时（第 {attempt + 1}/{max_retries} 次）"
-                except Exception as exc:
-                    last_error = str(exc)
+        import concurrent.futures as _cf
+        import urllib.request as _ur
+        tasks = []
+        for face in faces:
+            for row in range(1, tiles_per_axis + 1):
+                for col in range(1, tiles_per_axis + 1):
+                    vr = f"{row:02d}"; vc = f"{col:02d}"
+                    url = f"{base_url}/{face}/l3/{vr}/l3_{face}_{vr}_{vc}.jpg"
+                    target = out_dir / face / "l3" / vr / f"l3_{face}_{vr}_{vc}.jpg"
+                    if not target.exists():
+                        tasks.append((url, target))
 
-                if attempt < max_retries - 1:
-                    time.sleep(2 * (attempt + 1))  # 2s, 4s 退避
+        if tasks:
+            def _fetch(url, target, timeout=20, retries=3, sleep=0.8):
+                import time as _t
+                req = _ur.Request(url, headers={"User-Agent": "ForbiddenCity/1.0"})
+                for i in range(retries):
+                    try:
+                        with _ur.urlopen(req, timeout=timeout) as resp:
+                            data = resp.read()
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(data)
+                        return True
+                    except Exception:
+                        if i + 1 < retries:
+                            _t.sleep(sleep)
+                return False
 
-            raise RuntimeError(last_error or "下载失败（已达最大重试次数）")
-        finally:
+            downloaded = 0
+            with _cf.ThreadPoolExecutor(max_workers=8) as ex:
+                futures = {ex.submit(_fetch, url, tgt): url for url, tgt in tasks}
+                for fut in _cf.as_completed(futures):
+                    try:
+                        if fut.result():
+                            downloaded += 1
+                    except Exception:
+                        pass
+            if downloaded == 0 and tasks:
+                raise RuntimeError(f"下载失败：{len(tasks)} 个瓦片均未成功")
+
+        # 下载成功后更新库存
+        tiles_dir = out_dir
+        if tiles_dir.exists():
+            tile_count = sum(1 for _ in tiles_dir.rglob("*.jpg"))
+            # 更新内存中的库存文件
             try:
-                tmp_path.unlink(missing_ok=True)
+                inv = _read_json(INVENTORY_PATH) or []
             except Exception:
-                pass
+                inv = []
+            found = False
+            for row in inv:
+                if row.get("panorama_id") == pid and row.get("pano_stub") == stub:
+                    row["file_count"] = tile_count
+                    row["levels"] = {"l3": tile_count}
+                    found = True
+                    break
+            if not found:
+                inv.append({
+                    "panorama_id": pid,
+                    "pano_stub": str(stub),
+                    "file_count": tile_count,
+                    "levels": {"l3": tile_count},
+                })
+            try:
+                INVENTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+                INVENTORY_PATH.write_text(
+                    json.dumps(inv, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass  # 库存更新失败不影响下载成功
 
 
 # ---- 场景播放记录 ----

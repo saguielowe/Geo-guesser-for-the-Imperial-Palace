@@ -672,7 +672,7 @@ function showKnowledgeQuiz() {
           state.quizBonus += 500; state.totalScore += 500; updateScoreboardUI();
         }
         // 接知识问答
-        setTimeout(function () { showKnowledgeFact(); }, 1200);
+        setTimeout(function () { showKnowledgeFact(); }, 600);
       });
       dom.knowledgeOptions.appendChild(btn);
     });
@@ -682,6 +682,10 @@ function showKnowledgeQuiz() {
 function showKnowledgeFact() {
   var scene = state.currentScene;
   if (!scene) return;
+  if (!state.knowledgeData || state.knowledgeData.length === 0) {
+    console.warn("[quiz] knowledgeData is empty, skipping knowledge fact");
+    return;
+  }
   var knowledgeEntry = null;
   for (var i = 0; i < state.knowledgeData.length; i++) {
     if (state.knowledgeData[i].scene_name === scene.scene_name) {
@@ -1242,7 +1246,21 @@ async function init() {
     dom.mapBox?.classList.remove("is-ready");
   }
 
-  if (dom.sceneCount) dom.sceneCount.textContent = formatValue(scenesResponse.total);
+  var playableCount = state.scenes.filter(function (s) { return (s.local_tile_count || 0) > 0; }).length;
+  if (dom.sceneCount) dom.sceneCount.textContent = formatValue(playableCount);
+
+  // 从后端同步已玩计数（解决页面刷新后标题栏计数归零的问题）
+  try {
+    var statusResp = await requestJson("/api/resources/status");
+    var backendPlayed = statusResp.played_count || 0;
+    if (backendPlayed > 0 && dom.playedCount) {
+      dom.playedCount.textContent = String(backendPlayed);
+      // 同步前端 playedScenes 对象，避免全玩过后仍显示未重置
+      if (statusResp.played_scenes) {
+        statusResp.played_scenes.forEach(function (name) { playedScenes[name] = true; });
+      }
+    }
+  } catch (e) { /* 非关键 */ }
 
   // 报告模式六景导航
   var REPORT_SCENES = ["太和殿", "中和殿", "保和殿", "箭亭", "神武门", "天一门"];
@@ -1308,9 +1326,47 @@ function setupSettingsPanel() {
   document.getElementById("btn-prefetch")?.addEventListener("click", async function () {
     var btn = document.getElementById("btn-prefetch");
     if (!btn) return;
-    btn.disabled = true; btn.textContent = "下载中...";
-    try { await requestJson("/api/resources/prefetch"); await refreshUsage(); } catch (e) { console.warn(e); }
-    btn.disabled = false; btn.textContent = "预下载 5 景";
+    btn.disabled = true; btn.textContent = "排队中...";
+    try {
+      var resp = await requestJson("/api/resources/prefetch");
+      var total = (resp.prefetched || []).length;
+      if (total === 0) {
+        btn.textContent = "无新场景可下载";
+        setTimeout(function () { btn.disabled = false; btn.textContent = "预下载 5 景"; }, 2000);
+        return;
+      }
+      // 轮询下载进度
+      var pollCount = 0;
+      var maxPolls = 120; // 最多等 2 分钟
+      var poll = setInterval(async function () {
+        pollCount++;
+        try {
+          var status = await requestJson("/api/resources/status");
+          var q = status.download_queue || {};
+          if (q.active || q.queued > 0) {
+            var done = q.completed || 0;
+            var failed = q.failed || 0;
+            btn.textContent = "下载中 " + (done + failed) + "/" + total;
+          } else {
+            clearInterval(poll);
+            if (q.failed > 0 && q.failed_items) {
+              var reasons = q.failed_items.map(function (f) { return f.scene_name + ": " + f.reason; }).join("\n");
+              alert("下载完成：" + q.completed + " 成功, " + q.failed + " 失败\n" + reasons);
+            }
+            // 刷新服务端 STATE 后重载页面
+            try { await requestJson("/api/resources/refresh"); } catch (e) { /* ok */ }
+            location.reload();
+          }
+        } catch (e) { /* 轮询失败忽略 */ }
+        if (pollCount >= maxPolls) {
+          clearInterval(poll);
+          btn.disabled = false; btn.textContent = "预下载 5 景（超时）";
+        }
+      }, 1000);
+    } catch (e) {
+      console.warn(e);
+      btn.disabled = false; btn.textContent = "预下载 5 景";
+    }
   });
   document.getElementById("btn-prune-by-mb")?.addEventListener("click", async function () {
     var mb = parseFloat(document.getElementById("budget-mb")?.value || "500");
@@ -1346,8 +1402,7 @@ async function refreshUsage() {
       el("stat-pano-mb", u.pano_mb + " MB");
       el("stat-other-mb", u.other_mb + " MB");
       el("stat-total-mb", u.total_mb + " MB");
-      el("stat-playable", (data.unplayed_local_count || 0) + " / " + (data.playable_count || 0));
-      el("stat-played", String(data.played_count || 0));
+      el("stat-playable", (data.played_count || 0) + " / " + (data.playable_count || 0));
     }
 
     // 显示下载队列状态

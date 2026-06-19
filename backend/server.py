@@ -6,6 +6,7 @@ import json
 import mimetypes
 import random
 import re
+import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -37,10 +38,9 @@ INVENTORY_PATH = PROCESSED_DIR / "local_tiles_inventory.json"
 KNOWLEDGE_PATH = PROCESSED_DIR / "scene_knowledge.json"
 ANCHOR_POINTS_PATH = PROCESSED_DIR / "map_anchor_points.captured.json"
 
-import sys as _sys
 _backend_dir = Path(__file__).resolve().parent
-if str(_backend_dir) not in _sys.path:
-    _sys.path.insert(0, str(_backend_dir))
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
 from resource_manager import (  # noqa: E402
     compute_usage,
     prefetch_scenes,
@@ -1151,6 +1151,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 "catalog_source": STATE["catalog_source"],
                 "download_queue": _queue.status(),
                 "played_count": len(played),
+                "played_scenes": sorted(played),
                 "unplayed_local_count": len(unplayed_local),
             }
             if include_usage:
@@ -1191,9 +1192,21 @@ class AppHandler(BaseHTTPRequestHandler):
             return self._send_json(HTTPStatus.OK, result)
 
         if pathname == "/api/resources/refresh":
-            # 强制刷新占用缓存
+            # 强制刷新 INVENTORY 和 STATE
+            try:
+                global INVENTORY
+                INVENTORY = load_inventory()
+                new_state = load_state()
+                STATE.clear()
+                STATE.update(new_state)
+            except Exception:
+                pass
             usage = compute_usage(force=True)
-            return self._send_json(HTTPStatus.OK, {"usage": usage})
+            return self._send_json(HTTPStatus.OK, {
+                "usage": usage,
+                "scene_count": STATE["real_scene_count"],
+                "playable_count": STATE["playable_count"],
+            })
 
         if pathname == "/api/scenes":
             params = parse_qs(parsed.query)

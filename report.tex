@@ -7,6 +7,7 @@
 \usepackage{caption}
 \usepackage{subcaption}
 \usepackage{enumitem}
+\usepackage{float}
 \usepackage{amsmath}
 \usepackage{xcolor}
 \usepackage{listings}
@@ -42,7 +43,8 @@
   \large 基于故宫数字全景的 GeoGuessr 风格定位游戏}
 \author{%
   姓名：李子嘉 \quad
-  学号：2024012325 \\[0.3em]
+  学号：2024012325 \quad
+  专业：软件工程 \\[0.3em]
   课程：故宫学 \quad
   日期：2026 年 6 月
 }
@@ -50,39 +52,54 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-  本项目「寻迹故宫」（Tracing the Forbidden City）在故宫官方数字全景资源（\url{https://pano.dpm.org.cn/}）基础上，实现了一款 GeoGuessr 风格的 Web 定位游戏：玩家观察 360° 全景，在离线故宫平面图上点击猜测位置，系统按误差计分并展示建筑知识。针对官方坐标与本地宫图瓦片不完全一致的问题，我们采集 \textbf{40} 个场景锚点，覆盖故宫 11 个区域，采用全局及分 panorama 仿射变换校正真值；前端集成 krpano 全景浏览与 Leaflet 宫图交互，后端 Python 提供静态资源与按需下载管理。当前版本 \textbf{1.0} 支持 40 个已锚点场景、季节/建筑问答、本地资源懒加载与报告演示模式。本文介绍项目背景、系统设计、坐标标定方法、主要功能与体验评估，并讨论局限与后续工作。
+  本项目「寻迹故宫」（Tracing the Forbidden City）以故宫官方数字全景资源为基础，实现了一款 GeoGuessr 风格的 360° 定位游戏。玩家观察全景画面，在离线故宫平面图上点击猜测所在位置，系统按误差计分并展示建筑知识。项目采集 40 个场景锚点，覆盖故宫 11 个建筑区域，通过仿射变换校正在地坐标；前端集成 krpano 全景引擎与 Leaflet 宫图交互，后端以 Python 提供本地服务与资源管理，并打包为独立桌面应用。在技术实现之外，锚点标定、知识题目撰写与全景观察的过程本身即构成了一种沉浸式的故宫空间学习体验。
   \vspace{0.5em}
-  
+
   \noindent\textbf{关键词：}数字文化遗产；全景浏览；地图定位；仿射标定；教育游戏
 \end{abstract}
 \section{引言}
-故宫博物院自 2015 年起逐步开放线上数字漫游，官方站点提供基于 krpano 的多季节 360° 全景与配套「小地图」标点。这类资源兼具文化展示与空间认知价值，但缺少面向公众的互动玩法。GeoGuessr 类游戏通过「看街景猜地图位置」训练空间推理，若迁移至故宫场景，可在娱乐中强化对中轴线、三大殿、御花园等空间结构的理解。
-本项目定位为通识课课程作品：在\textbf{不依赖官方站点在线可用性}的前提下，缓存必要瓦片于本地，完成可离线演示的完整游戏闭环；同时保留锚点标定、资源管理等可扩展接口，便于后续作为专业课前端项目的迭代基础。
+本作业为《故宫学》课程期末项目。笔者就读于软件工程专业，选题时希望把课堂所学的故宫空间格局、建筑名称与数字遗产资源，做成一个能亲手打开、能玩一局的小系统——而不止于读文献或看网页。
+
+故宫博物院自 2015 年起逐步开放线上数字漫游，官方站点提供基于 krpano 的多季节 360° 全景与配套小地图标点。这些资源兼具文化展示与空间认知价值，但缺少面向公众的互动玩法。GeoGuessr 类游戏通过「看街景猜位置」训练空间推理能力，若迁移至故宫场景，可在娱乐中强化对中轴线、三大殿、御花园等空间结构的理解。项目在\textbf{不依赖官方站点在线可用性}的前提下，缓存所需瓦片于本地，完成可离线运行的完整游戏闭环，并通过 Electron 打包为独立桌面应用，免去安装 Python 等运行环境的负担。
 \section{需求与目标}
-\subsection{核心玩法}
-根据项目需求文档，最小可玩版本需实现：
-\begin{enumerate}[nosep]
-  \item 随机（或指定）抽取一个故宫 \texttt{scene}；
-  \item 在 360° viewer 中观察环境；
-  \item 在故宫平面图上点击猜测坐标；
-  \item 计算猜测与真值距离并输出分数；
-  \item 展示正确位置、建筑名称与知识点；
-  \item 进入下一题。
-\end{enumerate}
-\subsection{扩展目标（1.0 已实现）}
+\subsection{设计推导：从游戏目标到功能决策}
+
+本项目本质上是一个空间认知游戏：玩家置身于一个未知的故宫场景中，通过 360° 全景观察环境，在平面图上推断自己的位置。以下从这一核心目标出发，逐步推导各功能模块的设计依据。
+
+\textbf{核心交互闭环。} 游戏的最小可玩单元由三个动作构成：观察（see）、定位（locate）、反馈（feedback）。玩家在 360° 全景中自由旋转视角、识别建筑特征，随即在宫图上标定猜测点；系统给出距离误差与得分后，展示真值位置供玩家对比。这一闭环的每一环节都对应了具体的设计选择：
+
 \begin{itemize}[nosep]
-  \item \textbf{40 景锚点题库}：覆盖中轴线（午门、三大殿、后三宫）、御花园、宁寿宫花园、养心殿、文渊阁、武英殿、东西六宫等 11 个区域；
-  \item \textbf{季节小问}与\textbf{建筑知识问答}，答对额外加分；
-  \item \textbf{本地资源管理}：懒下载、磁盘占用统计、按容量/题数清理；
-  \item \textbf{报告演示模式}（\texttt{?report=1}）：隐藏开发向 UI，便于截图与答辩；
-  \item \textbf{满分反馈}：定位误差 $\le 5$（用户坐标单位）时触发 5000 分特效。
+  \item \textbf{为什么用 360° 全景而非静态图片？} 故宫的空间信息分布在建筑朝向、院落围合、屋顶形制、装饰细部等多个维度。一张固定角度的照片只能呈现其中一面；360° 全景允许玩家主动转头寻找线索——看到歇山顶知道在配殿方向、瞥见琉璃影壁确认在乾清门附近——这种「主动观察」是空间推理的前提。
+  \item \textbf{为什么用连续计分而非对/错二分？} 精准定位对非专业玩家门槛过高。分段线性衰减的计分曲线（$\le 5$ 单位满分，$\le 160$ 单位仍有 750 分）保证了任何水平的玩家都能获得正向反馈，同时又为追求满分的玩家保留了挑战空间。误差 $\le 5$ 单位时触发满分特效（计分板金边脉冲、纸屑动画、三音 chime），将精确命中的稀缺时刻转化为强烈的正向情绪。
+  \item \textbf{为什么隐藏误差距离，只显示得分？} 若直接显示「你差了 37 米」，玩家会将其视为冷冰冰的对错判断；用「本题得分 3000 / 5000」替代，让反馈更接近游戏语境，降低挫败感。
+  \item \textbf{为什么随机出题且不重复？} 确定性序列会导致玩家记住答案而非提升观察能力；每局从未玩过的本地场景中随机抽取，保证每次打开都是新的空间谜题。
 \end{itemize}
+
+\textbf{从定位到知识。} 纯定位玩法在连续多局后可能出现疲劳——玩家需要更丰富的反馈层次。因此在提交定位结果后追加了两层问答：季节判断（利用官方提供的夏/冬两季全景资源差异）和建筑识别（从 40 景中随机抽取三个干扰项）。更进一步，为每个场景编写了考查建筑特征、历史功能或文化典故的知识选择题——例如中和殿的屋顶形制、坤宁宫的萨满祭祀功能、碧螺亭的梅花纹装饰。这些题目并非附加的「知识点灌输」，而是定位行为的自然延伸：玩家已经在全景中看到了这座建筑，题目只是引导他注意那些可能被忽略的细节。
+
+\textbf{从在线依赖到离线可用。} 官方全景站点的瓦片资源约 222\,MB（仅 l3 层级），且需逐 tile 从远程拉取。若每次启动都依赖外部网络，课程展示和日常使用的稳定性无法保证。因此系统将全景瓦片、宫图底图、krpano 与 Leaflet 运行时全部缓存至本地，后端以 Python 标准库 \texttt{ThreadingHTTPServer} 提供一体化静态服务，无需安装任何第三方 Web 框架。在此基础上设计了懒下载策略：默认内置 10 景代表性场景确保开箱即用（约 55\,MB 全景数据），其余 30 景按需从官方源拉取并持久化，用户可通过设置面板查看磁盘占用、预下载或清理缓存。
+
+\textbf{从浏览器到桌面应用。} Web 版本要求用户拥有 Python 运行环境并通过命令行启动，对非技术用户不够友好。为此引入 Electron 打包：前端与数据文件由 electron-builder 封装，Python 后端经 PyInstaller 编译为独立可执行文件，Electron 主进程在启动时自动拉起后端并加载前端页面。最终产物为一个约 181\,MB 的 Windows 安装包，用户双击即可使用，无需额外安装任何依赖。
+
+\textbf{真值坐标的标定问题。} 官方 \texttt{coordinates.json} 为每个全景场景提供了经纬度坐标，但这些坐标在不同 panorama 分区下存在系统性的尺度与偏移差异——直接将其映射到一张固定 offline 宫图上时，标点位置会与视觉所见产生明显偏差。若玩家凭全景中的建筑位置做出了正确判断，系统却因坐标误差判为「错误」，游戏的可信度将从根本上被破坏。为此建立了 40 景锚点采集流程：在调试模式下逐场景于宫图上人工标定真值，再按 panorama 分区拟合仿射变换矩阵，将宫图像素坐标与「用户坐标」双向映射。前端取真值时优先使用 per-pano affine 反算结果，其次为锚点直接坐标，最后回退至官方 catalog 数据，确保反馈的准确性始终尽可能接近玩家的视觉判断。
+
+\subsection{核心玩法}
+综合以上设计推导，系统当前的单局交互流程为：
+\begin{enumerate}[nosep]
+  \item 随机抽取一个故宫场景，在 360° 全景中自由漫游观察；
+  \item 在离线故宫平面图上点击猜测所在位置；
+  \item 提交猜测，系统计算与真值的欧氏距离并输出分段计分；
+  \item 展示真值位置标记与猜测—真值连线反馈；
+  \item 依次展示季节判断、建筑识别与知识点问答；
+  \item 进入下一题，已玩场景不再重复出现。
+\end{enumerate}
+
 \section{系统架构}
 \subsection{总体结构}
 系统采用轻量前后端分离架构：浏览器加载 \texttt{frontend/} 静态页面；\texttt{backend/server.py} 基于 Python 标准库 \texttt{ThreadingHTTPServer} 提供 HTTP 服务，统一托管前端、本地瓦片、JSON 配置及 REST 风格 API。
 \begin{figure}[htbp]
   \centering
-  \figplaceholder[width=0.92\linewidth]{01_home_overview.png}
+  \figplaceholder[width=0.92\linewidth]{报告模式.png}
   \caption{系统主界面（报告演示模式）。左侧为 krpano 360° 全景，右侧为 Leaflet 宫图与问答区；顶栏可一键切换六处代表场景。}
   \label{fig:home}
 \end{figure}
@@ -109,7 +126,7 @@
 \end{table}
 
 \subsection{全景与宫图}
-\textbf{全景侧}：使用 \textbf{krpano} 引擎，直接加载与官方一致的 \texttt{.tiles} 六面体立方瓦片结构（\texttt{f/b/l/r/u/d}，仅保留 \texttt{l3} 最高细节层级），按需拉取本地 jpg，避免整场景一次性下载。
+\textbf{全景侧}：使用 \textbf{krpano} 引擎，直接加载与官方一致的 \texttt{.tiles} 六面体立方瓦片结构（\texttt{f/b/l/r/u/d}，仅保留 \texttt{l3} 最高细节层级），按需拉取本地 jpg，避免整场景一次性下载。l3 层级单面 36 块瓦片、六面合计 216 块，分辨率足以清晰辨认建筑彩画纹样、匾额题字与琉璃装饰细部——例如碧螺亭栏板的梅花浮雕、太和殿内金柱上的沥粉贴金盘龙，均可在全景中直接观察。
 \textbf{地图侧}：Leaflet 使用 \texttt{L.CRS.Simple}，瓦片路径 \texttt{leaflet/tiles/\{z\}/tile\_\{x\}\_\{y\}.png}，世界尺度约 $8192\times 8192$ 像素（\texttt{MAP\_MAX\_ZOOM=5}）。用户点击地图时，将容器坐标反投影为「用户坐标系」下的 $(x,y)$，与锚点真值比较。
 \section{坐标标定与计分}
 \subsection{问题背景}
@@ -121,12 +138,7 @@
   \item \textbf{per-panorama affine}：对样本数 $n\ge 3$ 的分区独立拟合，显著降低不同 panorama 区域的像素误差。
 \end{itemize}
 所有锚点均存储为 \texttt{click\_pixel\_xy}（宫图像素坐标）与 \texttt{user\_x/user\_y}（用户坐标），通过仿射变换相互转换。前端 \texttt{getSceneTruthCoord} 优先级为：\texttt{click\_pixel\_xy} 仿射真值 $>$ 锚点 \texttt{user\_x/y} $>$ catalog 回退坐标。
-\begin{figure}[htbp]
-  \centering
-  \figplaceholder[width=0.88\linewidth]{T1_verify_anchors.png}
-  \caption{锚点验证模式（\texttt{?verify=anchors}）：在宫图上叠加各 scene 真值，用于质检标定结果。}
-  \label{fig:verify}
-\end{figure}
+
 \subsection{计分规则}
 猜测点 $(g_x,g_y)$ 与真值 $(t_x,t_y)$ 的欧氏距离为 $d$。本题得分采用分段线性插值，满分 5000 分：
 \begin{table}[htbp]
@@ -151,65 +163,71 @@
 \subsection{游戏流程}
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}[t]{0.48\linewidth}
-    \centering
-    \figplaceholder[width=\linewidth]{02_gameplay_before_submit.png}
-    \caption{提交前：全景观察 + 宫图选点}
-  \end{subfigure}
-  \hfill
-  \begin{subfigure}[t]{0.48\linewidth}
-    \centering
-    \figplaceholder[width=\linewidth]{03_score_after_submit.png}
-    \caption{提交后：连线反馈与计分}
-  \end{subfigure}
-  \caption{核心玩法两阶段界面}
-  \label{fig:gameplay}
+  \figplaceholder[width=0.92\linewidth]{中和殿提交前.png}
+  \caption{提交前：全景观察 + 宫图选点（中和殿，尚未点击猜测）}
+  \label{fig:gameplay_a}
+\end{figure}
+\begin{figure}[htbp]
+  \centering
+  \figplaceholder[width=0.92\linewidth]{保和殿展示选错.png}
+  \caption{提交后：选错时标出正确答案并显示连线反馈}
+  \label{fig:gameplay_b}
 \end{figure}
 单局流程：加载场景 $\rightarrow$ 全景漫游 $\rightarrow$ 宫图选点 $\rightarrow$ 提交 $\rightarrow$（随机）季节小问 $\rightarrow$ 建筑小问 $\rightarrow$ 下一题。随机出题\textbf{仅从未本地已下载瓦片的场景}中抽取，避免进入未缓存资源导致的加载失败；当未玩本地场景数低于阈值时，后台按锚点优先、非夏季优先等策略预下载。
 \subsection{满分特效（5000 分）}
-当 $d\le 5$ 时，除 550\,ms 分数滚动外，叠加方案 B 反馈：计分板金边脉冲、地图金色涟漪、顶部横幅「满分定位 · 5000」、轻量纸屑动画，以及 Web Audio 三音 chime。报告模式默认静音，录屏可加 \texttt{\&sound=1}。
+当 $d\le 5$ 时，除 550\,ms 分数滚动外，叠加方案 B 反馈：计分板金边脉冲、地图金色涟漪、顶部横幅「满分定位 · 5000」、轻量纸屑动画，以及 Web Audio 三音 chime。
 \begin{figure}[htbp]
   \centering
-  \figplaceholder[width=0.88\linewidth]{04_perfect_5000_fx.png}
-  \caption{5000 分满分特效（峰值帧）。建议在 \texttt{?report=1\&verify=anchors\&figure=3} 保和殿场景拍摄。}
+  \figplaceholder[width=0.92\linewidth]{太和殿满分.png}
+  \caption{5000 分满分特效：计分板金边脉冲、顶部横幅与纸屑动画。}
   \label{fig:perfect}
 \end{figure}
 \subsection{知识问答}
-\texttt{scene\_knowledge.json} 为 40 个场景提供问答题与解析文案；提交定位后展示与当前建筑相关的选择题。图~\ref{fig:quiz} 为季节与建筑问答示例。
+\texttt{scene\_knowledge.json} 为 40 个场景提供问答题与解析文案；提交定位后展示与当前建筑相关的选择题。图~\ref{fig:quiz_a} 与图~\ref{fig:quiz_b} 为季节与建筑问答示例。
 \begin{figure}[htbp]
   \centering
-  \begin{subfigure}[t]{0.48\linewidth}
-    \centering
-    \figplaceholder[width=\linewidth]{05_season_quiz.png}
-    \caption{季节小问}
-  \end{subfigure}
-  \hfill
-  \begin{subfigure}[t]{0.48\linewidth}
-    \centering
-    \figplaceholder[width=\linewidth]{06_knowledge_quiz.png}
-    \caption{建筑小问（神武门）}
-  \end{subfigure}
-  \caption{扩展问答模块}
-  \label{fig:quiz}
+  \figplaceholder[width=0.92\linewidth]{文渊阁雪景.png}
+  \caption{季节小问：文渊阁冬雪，积雪本身即提示了拍摄季节}
+  \label{fig:quiz_a}
+\end{figure}
+\begin{figure}[htbp]
+  \centering
+  \figplaceholder[width=0.92\linewidth]{中和殿屋顶题.png}
+  \caption{建筑知识问答：中和殿屋顶形制}
+  \label{fig:quiz_b}
 \end{figure}
 \subsection{本地资源管理}
-全库 40 景全景瓦片（仅 l3 最高细节层级）合计约 222\,MB，宫图及静态资源约 52\,MB（设置面板将宫图并入「其它」展示，因无宫图无法游戏）。用户可通过右下角「设置」面板查看占用、设置磁盘预算、触发预下载或按 MB / 场景数清理缓存；清理时保护已锚点场景。
+全库 40 景全景瓦片（仅 l3 最高细节层级）合计约 222\,MB，宫图及静态资源约 52\,MB。若全量内置，安装包体积过大且多数场景在单次使用中不会被访问；若完全不内置，首次打开无场景可玩。因此采用「精选内置 + 懒下载」策略：默认打包 10 景代表性场景确保开箱即用，其余 30 景在游戏过程中按需从官方源拉取，用户也可通过「设置」面板手动触发预下载、查看磁盘占用或按容量清理缓存（清理时保护已锚点场景）。
+
 \begin{figure}[htbp]
   \centering
-  \figplaceholder[width=0.55\linewidth]{T2_settings_storage.png}
-  \caption{资源占用与下载设置（普通模式）}
+  \figplaceholder[width=0.92\linewidth]{设置界面截图.png}
+  \caption{设置面板：显示磁盘占用、已玩/可玩数量，支持懒下载开关与缓存清理。}
   \label{fig:settings}
 \end{figure}
+
 \subsection{报告演示模式}
-面向 LaTeX 截图与答辩，URL 参数 \texttt{?report=1} 会：隐藏「设置」面板、关闭后台预下载、更换产品向副标题、显示六个代表场景快捷按钮。推荐配图场景：太和殿、中和殿、保和殿、箭亭、神武门、天一门（\texttt{figure=1..6}）。
+为便于截图与展示，URL 添加 \texttt{?report=1} 参数可隐藏设置面板及开发 UI，顶栏提供六处代表场景（太和殿、中和殿、保和殿、箭亭、神武门、天一门）的一键切换。
 \section{部署与运行}
-本地启动：
+\subsection{开发模式}
+本地开发需 Python 3.11+ 环境，启动后浏览器访问即用：
 \begin{lstlisting}
 start_server.bat    # Windows
 ./start_server.sh   # macOS / Linux
 \end{lstlisting}
-浏览器访问 \url{http://127.0.0.1:8000/}。报告演示：\url{http://127.0.0.1:8000/?report=1}。
-交付方案：（A）教师机 Python + 本地瓦片子集；（B）Electron 单文件打包（约 180--220\,MB，计划中）；（C）PDF 报告 + 演示录屏。
+游戏入口 \url{http://127.0.0.1:8000/}，报告演示模式 \url{http://127.0.0.1:8000/?report=1}，锚点采集模式 \url{http://127.0.0.1:8000/?debug=anchors}。
+
+\subsection{Electron 桌面打包}
+使用 electron-builder 将项目打包为独立桌面应用，无需用户安装 Python。后端通过 PyInstaller 编译为 \texttt{server.exe}（21 MB），Electron 主进程启动时自动拉起后端，窗口加载完毕后即可离线使用。
+
+打包流程：
+\begin{lstlisting}
+npm install                     # 安装 Electron 依赖
+pyinstaller --onedir --name server backend/server.py  # 编译后端
+npm run build:win               # 输出 Windows 安装包
+\end{lstlisting}
+
+产物为 \texttt{dist/寻迹故宫 Setup 1.0.0.exe}（约 181 MB），包含 Electron 运行时 + Python 后端 + 宫图瓦片 + 精选 10 景全景资源。安装后可从开始菜单搜索「寻迹故宫」启动，其余 30 景可在游戏内通过懒下载获取（下载完成后重启程序生效）。
 \section{测试与体验}
 \subsection{功能测试}
 \begin{itemize}[nosep]
@@ -221,9 +239,9 @@ start_server.bat    # Windows
 \subsection{标定精度}
 在 per-pano affine 启用后，多数锚点在本区模型下残差 $<10$ user 单位，满足游戏精度需求。对游戏而言，$d\le 5$ 的满分区间在视觉上要求点击非常接近真值，符合「精准定位」难度设计。
 \subsection{性能}
-早期版本在每次页面加载时扫描 \texttt{data/raw} 统计占用，导致约 5\,s 延迟；现改为打开设置面板时按需刷新并缓存 120\,s，首屏加载恢复至秒级。
+软件打开加载约需1秒，新题目的全景资源按需加载，首次移动视角时延迟约 200\,ms，之后流畅；提交后计算与渲染连线、分数、问答耗时均忽略不计。打开设置面板时会扫描本地瓦片统计占用，约5s（受磁盘性能影响），并缓存结果。
 \subsection{空间认知与学习体验}
-在逐景标注过程中，笔者深刻体会到一种独特的空间学习方式。此前对于故宫建筑的认知多停留在名称层面——「太和殿」「文渊阁」「养心殿」只是书本上的字符。但当需要为每个全景场景在宫图上精确标定位置时，必然反复比对实景中的建筑形制、朝向、周边参照物与平面图的对应关系。这一过程迫使标注者从「知道名字」进入「理解位置」：午门与太和门广场的尺度关系、乾清宫在中轴线上的前后序列、养心殿与西六宫的毗邻格局、文渊阁偏居东路一隅的清幽——每次标注都是一次对故宫空间叙事的重新发现。
+在逐景标注过程中，笔者深刻体会到一种独特的空间学习方式。此前对于故宫建筑的认知多停留在名称层面——「太和殿」「文渊阁」「养心殿」只是书本上的字符。但当需要为每个全景场景在宫图上精确标定位置时，必然反复比对实景中的建筑形制、朝向、周边参照物与平面图的对应关系。这一过程使得笔者从「知道名字」进入「理解位置」：午门与太和门广场的尺度关系、乾清宫在中轴线上的前后序列、养心殿与西六宫的毗邻格局、文渊阁偏居东路一隅的清幽——每次标注都是一次对故宫空间叙事的重新发现。
 
 换言之，锚点标定不只是一个工程步骤，它本身就是一种沉浸式的学习活动。覆盖 11 个区域 40 景的题库，使玩家能够在故宫从「中轴线上的几座大殿」到东西六宫、宁寿宫花园等细节区域之间自由跳跃，体验完整的故宫空间叙事。
 \subsection{跨建筑空间对比}
@@ -232,10 +250,17 @@ start_server.bat    # Windows
 游戏机制将这些对比自然地织入体验——玩家在前一题还是金碧辉煌的太和殿，下一题便可能转入庭院深深的东西六宫。这种跳跃式空间切换带来的直观感受，远比按游览路线线性参观更加鲜活。
 \section{总结与展望}
 \subsection{工作总结}
-本项目完成了从官方数字全景到可玩定位游戏的迁移：集成 krpano 与 Leaflet，建立 40 点锚点与分 panorama 仿射标定 pipeline，覆盖故宫 11 个区域，实现计分、问答、资源管理与报告演示模式，版本 \textbf{1.0} 可用于课程答辩与交付。
+本项目完成了从官方数字全景到可玩定位游戏的迁移：集成 krpano 与 Leaflet，建立 40 点锚点与分 panorama 仿射标定 pipeline，覆盖故宫 11 个区域，实现计分、问答、资源管理与报告演示模式，版本 \textbf{1.0} 可用于交付。
 
 \subsection{出题即学习}
-在编写 40 道知识问答题的过程中，笔者经历了另一种维度的故宫学习。不同于锚点标定时的空间沉浸，出题需要逐一查阅各建筑的史料、功能、轶事，将零散信息凝练为四选一题目和精炼解析。为写好太和殿的题目，翻出了「金銮殿」俗称的由来与殿内六根蟠龙金柱的规制；为理清坤宁宫的独特之处，对比了沈阳清宁宫与北京坤宁宫的满族建筑传承；为捕捉乾隆花园的精髓，研读了禊赏亭「曲水流觞」的兰亭典故与遂初堂「退隐」背后的孙绰《遂初赋》。乾清门的御门听政、交泰殿的二十五宝玺、文渊阁的黑色琉璃瓦与四库全书——每道题目的背后都是一段可以展开讲述的故宫故事。这种「带着问题去查资料」的方式，比被动阅读更高效，也更有趣。
+在编写 40 道知识问答题的过程中，笔者经历了另一种维度的故宫学习。不同于锚点标定时的空间沉浸，出题需要逐一查阅各建筑的史料、功能、轶事，将零散信息凝练为四选一题目和精炼解析。为写好太和殿的题目，翻出了「金銮殿」俗称的由来与殿内六根蟠龙金柱的规制；为理清坤宁宫的独特之处，对比了沈阳清宁宫与北京坤宁宫的满族建筑传承；为捕捉乾隆花园的精髓，研读了禊赏亭「曲水流觞」的兰亭典故与遂初堂「退隐」背后的孙绰《遂初赋》。乾清门的御门听政、交泰殿的二十五宝玺、文渊阁的黑色琉璃瓦与四库全书——每道题目的背后都是一段可以展开讲述的故宫故事。这种「带着问题去查资料」的方式，比被动阅读更高效，也更有趣。更令人惊喜的是，在测试过程中发现某些题目与全景画面形成了微妙呼应——例如碧螺亭的题目考察其「通体梅花纹」的装饰特色，而玩家恰好能在 360° 全景中清晰看到亭身栏板、天花上精雕的梅花图案（图~\ref{fig:plum}），答题变成了「现场找线索」的观察游戏。这种设计意外地复刻了实地游览的体验——在真实故宫中，导游提问「你看到柱子上的龙了吗？」正是同样的引导观察逻辑。知识问答因此不仅是被动的记忆测试，更成为鼓励玩家仔细端详全景细节、在「玩中学」的桥梁。
+
+\begin{figure}[htbp]
+  \centering
+  \figplaceholder[width=0.92\linewidth]{梅花小知识题.png}
+  \caption{碧螺亭知识问答：题目引导玩家在全景中寻找梅花纹装饰，题干与画面互相印证。}
+  \label{fig:plum}
+\end{figure}
 
 \section*{参考文献}
 \addcontentsline{toc}{section}{参考文献}
@@ -246,25 +271,35 @@ start_server.bat    # Windows
   \item GeoGuessr 游戏机制参考 \url{https://www.geoguessr.com/}
 \end{enumerate}
 \appendix
-\section{配图文件清单}
-\begin{table}[htbp]
+\section{工程规模}
+\begin{table}[H]
   \centering
-  \small
-  \begin{tabular}{@{}ll@{}}
+  \caption{项目代码与资源规模统计}
+  \begin{tabular}{@{}lr@{}}
     \toprule
-    文件名 & 用途 \\
+    类别 & 数量 \\
     \midrule
-    \texttt{01\_home\_overview.png} & 图~\ref{fig:home} \\
-    \texttt{02\_gameplay\_before\_submit.png} & 图~\ref{fig:gameplay}a \\
-    \texttt{03\_score\_after\_submit.png} & 图~\ref{fig:gameplay}b \\
-    \texttt{04\_perfect\_5000\_fx.png} & 图~\ref{fig:perfect} \\
-    \texttt{05\_season\_quiz.png} & 图~\ref{fig:quiz}a \\
-    \texttt{06\_knowledge\_quiz.png} & 图~\ref{fig:quiz}b \\
-    \texttt{07\_next\_round.png} & 完整流程（可选正文引用） \\
-    \texttt{T1\_verify\_anchors.png} & 图~\ref{fig:verify} \\
-    \texttt{T2\_settings\_storage.png} & 图~\ref{fig:settings} \\
+    后端 Python（server.py + resource\_manager.py） & 1\,904 行 \\
+    前端 JavaScript（app.js） & 1\,431 行 \\
+    前端 HTML（index.html） & 170 行 \\
+    前端 CSS（styles.css） & 703 行 \\
+    工具脚本（scripts/） & 1\,727 行 \\
+    \textbf{代码合计} & \textbf{5\,935 行} \\
+    \midrule
+    全景瓦片（.jpg, 仅 l3） & 8\,845 个 \\
+    宫图瓦片（.png） & 1\,364 个 \\
+    全景数据体积 & 229\,MB \\
+    宫图及静态资源体积 & 52\,MB \\
+    \midrule
+    场景题库 & 40 景 \\
+    知识问答条目 & 40 条 \\
+    锚点真值 & 40 个 \\
+    \midrule
+    Electron 安装包（10 景内置） & 181\,MB \\
     \bottomrule
   \end{tabular}
 \end{table}
-详细拍摄 URL 与检查项见 \texttt{docs/report\_assets\_and\_perfect\_score.md}。
+
+\section{游戏安装包}
+游戏本体可以在网络学堂的作业提交窗口下载。其与论文电子版放在同一压缩包内，解压后双击 \texttt{寻迹故宫 Setup 1.0.0.exe} 即可安装。
 \end{document}
